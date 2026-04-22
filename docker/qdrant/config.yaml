@@ -1,0 +1,31 @@
+# Qdrant production configuration
+# https://qdrant.tech/documentation/guides/configuration/
+
+storage:
+  # Persist vectors and payloads to disk
+  storage_path: /qdrant/storage
+
+  # Performance: how many vectors to keep in RAM per segment
+  # Increase if you have RAM to spare (reduces disk reads)
+  optimizers_indexing_threshold: 20000
+
+  # HNSW index parameters (quality vs speed tradeoff)
+  hnsw_index:
+    m: 16                    # Number of edges per node (default 16)
+    ef_construct: 100        # Build-time search depth (higher = better quality, slower build)
+    full_scan_threshold: 10000
+
+service:
+  http_port: 6333
+  grpc_port: 6334
+
+  # Disable gRPC if not needed (reduces attack surface)
+  enable_tls: false
+
+  # Max request body size (50 MB — allow large batch upserts)
+  max_request_size_mb: 50
+
+  # Parallelism for search
+  max_workers: 0   # 0 = auto (uses CPU count)
+
+log_level: WARN

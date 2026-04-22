@@ -1,0 +1,22 @@
+"""
+src/api/v1/__init__.py
+──────────────────────
+Aggregates all v1 routers into a single router.
+main.py mounts this at /api/v1.
+"""
+
+from fastapi import APIRouter
+
+from src.api.v1.auth import router as auth_router
+from src.api.v1.chat import router as chat_router
+from src.api.v1.documents import router as documents_router
+from src.api.v1.eval import router as eval_router
+from src.api.v1.workspaces import router as workspaces_router
+
+api_v1_router = APIRouter()
+
+api_v1_router.include_router(auth_router)
+api_v1_router.include_router(workspaces_router)
+api_v1_router.include_router(documents_router)
+api_v1_router.include_router(chat_router)
+api_v1_router.include_router(eval_router)
