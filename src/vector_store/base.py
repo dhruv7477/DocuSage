@@ -24,8 +24,12 @@ class VectorPayload:
 
     This is the complete context needed to:
     - Enforce isolation (user_id, workspace_id)
-    - Reconstruct the chunk for prompt building (text, source, page)
-    - Link back to PostgreSQL records (document_id, chunk_index)
+    - Reconstruct the chunk for prompt building (text, source, page,
+      heading_path)
+    - Render precise UI citations (char_start / char_end identify the
+      exact passage in the original `full_text`)
+    - Walk neighbouring chunks via prev_chunk_id / next_chunk_id when
+      we need extra context for an answer
     """
     user_id: str           # ★ ISOLATION KEY — every search MUST filter on this
     workspace_id: str
@@ -35,6 +39,12 @@ class VectorPayload:
     source: str            # Original filename
     page_number: int = 0
     chunk_total: int = 0   # Total chunks in the document (for context)
+    heading_path: list[str] = field(default_factory=list)
+    char_start: int = 0
+    char_end: int = 0
+    token_count: int = 0
+    prev_chunk_id: str | None = None
+    next_chunk_id: str | None = None
 
 
 @dataclass
@@ -132,7 +142,32 @@ class BaseVectorStore(ABC):
         """Returns True if the collection for this workspace exists."""
         ...
 
+    async def text_search(
+        self,
+        workspace_id: str,
+        query: str,
+        search_filter: "SearchFilter",
+        top_k: int = 50,
+    ) -> list["SearchResult"]:
+        """
+        Sparse / keyword retrieval over the same isolation filter as
+        `search()`. Default raises NotImplementedError so legacy stores
+        keep working; backends that support a full-text payload index
+        (Qdrant) override this. The Phase 3 retrieval pipeline calls it
+        in parallel with vector search to produce real hybrid results.
+        """
+        raise NotImplementedError("This vector store does not support text search.")
+
     @abstractmethod
     async def health(self) -> bool:
         """Returns True if the vector store is reachable."""
         ...
+
+    async def get_collection_dimension(self, workspace_id: str) -> int | None:
+        """
+        Return the configured vector dimension for the workspace's
+        collection, or None if the collection does not exist. Used by
+        `upsert_vectors` to validate the embedder's output dimension
+        matches what the collection was created with.
+        """
+        return None

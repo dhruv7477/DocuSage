@@ -1,37 +1,34 @@
 """
 src/retrieval/reranker.py
 ──────────────────────────
-Cross-encoder reranking of retrieved document chunks.
+Cross-encoder reranking + confidence-based abstention.
 
-The retrieval pipeline fetches candidates quickly (approximate nearest
-neighbour + BM25).  But bi-encoder similarity is approximate — it
-encodes query and document independently and compares embeddings.
-
-A cross-encoder reads query AND document TOGETHER, which allows
-it to model fine-grained relevance that bi-encoders miss (e.g.
-negation, conditional statements, exact-match within context).
+A cross-encoder reads (query, candidate) together and models
+fine-grained relevance — negation, numerics, conditionals — that
+bi-encoder retrieval can't see. Default model is `bge-reranker-v2-m3`
+(multilingual, ~568 MB), which is materially stronger than the legacy
+ms-marco-MiniLM on the kinds of grounded-document questions DocuSage
+is asked.
 
 Pipeline position:
-    retrieve (top 20-50) → rerank (cross-encoder) → take top K → LLM
+    hybrid retrieve (top 50) → rerank (cross-encoder) → top_k → LLM
 
-Two backends:
-    CrossEncoderReranker   Uses sentence-transformers CrossEncoder.
-                           Model: ms-marco-MiniLM-L-6-v2 (fast, good quality)
-                           Runs in a thread pool to avoid blocking the event loop.
+Output convention
+-----------------
+Reranker scores are passed through a sigmoid so they live in [0, 1]
+regardless of the underlying model's logit range. This means
+downstream code can use a single `abstention_threshold` setting (0.3
+by default) without knowing which cross-encoder is loaded.
 
-    LLMReranker            Uses the LLM to score relevance as a fallback
-                           when no cross-encoder model is available.
-                           Slower but requires no extra model weights.
-
-    NoOpReranker           Pass-through, preserves original order.
-                           Used when reranking is disabled via config.
-
-All three implement BaseReranker so the pipeline is reranker-agnostic.
+`compute_confidence()` returns the mean of the top-3 (post-sigmoid)
+scores. The RAG service uses it to decide whether to send the LLM a
+full grounded-answer prompt or the abstention branch.
 """
 
 from __future__ import annotations
 
 import asyncio
+import math
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 
@@ -86,34 +83,43 @@ class NoOpReranker(BaseReranker):
 
 class CrossEncoderReranker(BaseReranker):
     """
-    Cross-encoder reranker using sentence-transformers.
+    Cross-encoder reranker (sentence-transformers `CrossEncoder`).
 
-    Model: cross-encoder/ms-marco-MiniLM-L-6-v2
-    - 22M params, fast inference
-    - Trained on MS MARCO passage ranking
-    - ~2ms per (query, chunk) pair on CPU
+    Default model: BAAI/bge-reranker-v2-m3 (multilingual, ~568 MB).
+    Configurable via `RERANKER_MODEL`. Any ms-marco-* alternative works
+    too; we sigmoid the raw logits so the score scale is consistent.
 
-    The model is loaded lazily on first use and cached as a class
-    variable to avoid reloading across requests.
+    The model is loaded lazily on first use and cached on the class so
+    we pay the load cost (a few seconds on cold start, dominated by
+    weight downloads on the very first run) exactly once per process.
     """
 
     _model = None
-    _model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    _loaded_model_name: str | None = None
 
     def __init__(self, model_name: str | None = None) -> None:
-        if model_name:
-            self._model_name = model_name
+        # Read default lazily so tests / CI can monkey-patch settings.
+        from src.configs.config import get_settings
+        self._model_name = model_name or get_settings().reranker_model
 
     @classmethod
-    def _load_model(cls):
-        if cls._model is None:
-            try:
-                from sentence_transformers.cross_encoder import CrossEncoder
-                cls._model = CrossEncoder(cls._model_name)
-                log.info("cross_encoder_loaded", model=cls._model_name)
-            except Exception as exc:
-                log.error("cross_encoder_load_failed", error=str(exc))
-                raise
+    def _load_model(cls, model_name: str):
+        if cls._model is not None and cls._loaded_model_name == model_name:
+            return cls._model
+        # First call: model must be downloaded from HuggingFace (~568 MB for
+        # bge-reranker-v2-m3). Runs in the reranker thread pool so the event
+        # loop stays free, but may take 1-5 minutes on a cold cache. Log
+        # upfront so the user can see it in the API console.
+        log.info("cross_encoder_loading_model", model=model_name,
+                 note="first-run download may take several minutes")
+        try:
+            from sentence_transformers.cross_encoder import CrossEncoder
+            cls._model = CrossEncoder(model_name)
+            cls._loaded_model_name = model_name
+            log.info("cross_encoder_loaded", model=model_name)
+        except Exception as exc:
+            log.error("cross_encoder_load_failed", model=model_name, error=str(exc))
+            raise
         return cls._model
 
     async def rerank(
@@ -153,31 +159,27 @@ class CrossEncoderReranker(BaseReranker):
         top_k: int,
     ) -> list[SearchResult]:
         """Run in thread pool — blocks, not async-safe."""
-        model = self._load_model()
+        model = self._load_model(self._model_name)
 
-        # Build (query, passage) pairs
         pairs = [(query, r.payload.text) for r in results]
         scores = model.predict(pairs)
 
-        # Attach scores and sort descending
-        scored = sorted(
-            zip(results, scores),
-            key=lambda x: x[1],
-            reverse=True,
-        )
+        # Pass raw logits through a sigmoid → [0, 1]. This makes the
+        # confidence threshold (`abstention_threshold`) meaningful
+        # across cross-encoders with different output ranges. For
+        # bge-reranker-v2-m3 logits sit roughly in [-10, +10].
+        scored: list[tuple[SearchResult, float]] = []
+        for result, raw in zip(results, scores):
+            scored.append((result, _sigmoid(float(raw))))
+        scored.sort(key=lambda x: x[1], reverse=True)
 
-        # Rebuild SearchResult with cross-encoder score replacing original
-        reranked = []
-        max_score = float(scored[0][1]) if scored else 1.0
-        for result, ce_score in scored[:top_k]:
-            # Normalise to [0,1] using sigmoid-like clamping
-            normalised = max(0.0, min(1.0, (float(ce_score) + 10) / 20))
+        reranked: list[SearchResult] = []
+        for result, sigmoid_score in scored[:top_k]:
             reranked.append(SearchResult(
                 chunk_id=result.chunk_id,
-                score=round(normalised, 4),
+                score=round(sigmoid_score, 4),
                 payload=result.payload,
             ))
-
         return reranked
 
 
@@ -285,3 +287,35 @@ def get_reranker(
         return LLMReranker(llm=llm)
     else:
         return NoOpReranker()
+
+
+# ── Confidence + abstention helpers ───────────────────────────────
+
+
+def _sigmoid(x: float) -> float:
+    # Numerically stable for large negative x.
+    if x >= 0:
+        z = math.exp(-x)
+        return 1.0 / (1.0 + z)
+    z = math.exp(x)
+    return z / (1.0 + z)
+
+
+def compute_confidence(reranked: list[SearchResult]) -> float:
+    """
+    Aggregate reranker confidence as the mean of the top-3 scores.
+
+    Mean-of-top-3 is the cheapest signal that handles two failure
+    modes well: (a) one freak high-scoring chunk that doesn't actually
+    answer the question, and (b) lots of mid-ranked chunks that
+    collectively look promising but aren't. The retrieval pipeline
+    feeds this into `abstention_threshold` to decide whether to send
+    the LLM the grounded-answer prompt or the no-answer prompt.
+
+    Returns 0.0 for an empty list so empty retrieval is treated as
+    maximum-uncertainty.
+    """
+    if not reranked:
+        return 0.0
+    top = [r.score for r in reranked[:3]]
+    return sum(top) / len(top)

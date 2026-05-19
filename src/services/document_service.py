@@ -115,7 +115,8 @@ class DocumentService:
             await self._storage.upload(content, storage_path, content_type)
             existing.status = DocumentStatus.PENDING
             existing.file_size_bytes = len(content)
-            existing.chunk_count = None
+            existing.chunk_count = 0
+            existing.progress = 0
             existing.error_message = None
             await self._db.flush()
             log.info("document_re_uploaded", document_id=str(doc_id), filename=filename)
@@ -134,19 +135,34 @@ class DocumentService:
 
         await self._storage.upload(content, storage_path, content_type)
 
-        document = Document(
-            id=doc_id,
-            workspace_id=workspace_id,
-            user_id=user.id,
-            filename=safe_filename,
-            original_filename=filename,
-            file_type=_EXT_TO_TYPE.get(ext, DocumentType.TXT),
-            file_size_bytes=len(content),
-            storage_path=storage_path,
-            status=DocumentStatus.PENDING,
-        )
-        self._db.add(document)
-        await self._db.flush()
+        # If anything below this line raises, we must clean up the blob
+        # we just put into MinIO/S3 — otherwise we leave an orphan that no
+        # database row tracks. Failures here are rare (constraint violations,
+        # session closed, etc.) but the cleanup is cheap.
+        try:
+            document = Document(
+                id=doc_id,
+                workspace_id=workspace_id,
+                user_id=user.id,
+                filename=safe_filename,
+                original_filename=filename,
+                file_type=_EXT_TO_TYPE.get(ext, DocumentType.TXT),
+                file_size_bytes=len(content),
+                storage_path=storage_path,
+                status=DocumentStatus.PENDING,
+            )
+            self._db.add(document)
+            await self._db.flush()
+        except Exception:
+            try:
+                await self._storage.delete(storage_path)
+            except Exception as cleanup_exc:
+                log.warning(
+                    "orphan_blob_cleanup_failed",
+                    storage_path=storage_path,
+                    error=str(cleanup_exc),
+                )
+            raise
 
         log.info(
             "document_uploaded",

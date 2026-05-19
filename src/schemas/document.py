@@ -19,6 +19,7 @@ class DocumentResponse(BaseModel):
     file_type: str
     file_size_bytes: int
     status: str
+    progress: int = 0
     chunk_count: int
     error_message: str | None
     created_at: datetime

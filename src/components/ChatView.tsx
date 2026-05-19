@@ -1,13 +1,17 @@
 import { useState, useRef, useEffect } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Send, Bot, User, ExternalLink, Loader2, Sparkles, ChevronDown } from 'lucide-react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Send, Bot, User, Loader2, Sparkles, ChevronDown, AlertTriangle, Info, X } from 'lucide-react'
 import { clsx } from 'clsx'
 import { formatDistanceToNow } from 'date-fns'
-import toast from 'react-hot-toast'
-import { chat as chatApi, type Message, type CitedSource } from '@/api'
+import {
+  chat as chatApi,
+  documents as docsApi,
+  IN_FLIGHT_STATUSES,
+  type CitedSource,
+  type Message,
+} from '@/api'
 import { useApp } from '@/store/app'
-import { useSSE } from '@/hooks/useSSE'
-import { Button } from '@/components/ui/Button'
+import { useSSE, type StreamWarning } from '@/hooks/useSSE'
 
 // ── Typewriter-style streaming cursor ────────────────────────────
 function StreamingContent({ content }: { content: string }) {
@@ -19,14 +23,132 @@ function StreamingContent({ content }: { content: string }) {
   )
 }
 
-// ── Source citation badge ─────────────────────────────────────────
-function SourceBadge({ source, index }: { source: CitedSource; index: number }) {
+// ── Error / warning banners ───────────────────────────────────────
+function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
   return (
-    <div className="flex items-center gap-2 px-3 py-2 bg-surface border border-border rounded-lg text-xs group hover:border-teal/30 transition-colors cursor-default">
-      <span className="font-mono text-teal/80 font-bold">[{index + 1}]</span>
-      <span className="text-ghost truncate flex-1">{source.source}</span>
-      {source.page && <span className="text-dim font-mono">p.{source.page}</span>}
-      <span className="text-dim font-mono ml-auto">{(source.score * 100).toFixed(0)}%</span>
+    <div className="flex items-start gap-3 px-4 py-3 mx-4 my-3 bg-red/8 border border-red/30 rounded-lg text-sm text-base">
+      <AlertTriangle className="w-4 h-4 text-red shrink-0 mt-0.5" />
+      <div className="flex-1">
+        <p className="font-medium text-red">Couldn't generate an answer</p>
+        <p className="mt-0.5 text-subtle">{message}</p>
+      </div>
+      <button
+        onClick={onDismiss}
+        className="text-dim hover:text-base transition-colors shrink-0"
+        aria-label="Dismiss"
+      >
+        <X className="w-4 h-4" />
+      </button>
+    </div>
+  )
+}
+
+function WarningBanner({ warning }: { warning: StreamWarning }) {
+  const label =
+    warning.code === 'low_confidence' ? 'Low confidence'
+    : warning.code === 'no_documents' ? 'No documents indexed'
+    : warning.code === 'partial_context' ? 'Partial match'
+    : 'Notice'
+  return (
+    <div className="flex items-start gap-2 px-3 py-2 mt-2 bg-amber/8 border border-amber/25 rounded-lg text-xs">
+      <Info className="w-3.5 h-3.5 text-amber shrink-0 mt-0.5" />
+      <div className="flex-1">
+        <span className="font-mono text-2xs uppercase tracking-widest text-amber/90 mr-2">{label}</span>
+        <span className="text-subtle">{warning.message}</span>
+      </div>
+    </div>
+  )
+}
+
+// ── Citation chip + helpers ───────────────────────────────────────
+
+// Highlight-and-scroll a source badge when its [n] chip is clicked.
+function focusSource(messageId: string, index: number) {
+  if (typeof document === 'undefined') return
+  const el = document.getElementById(`source-${messageId}-${index}`)
+  if (!el) return
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  el.classList.add('ring-2', 'ring-teal/60')
+  window.setTimeout(() => el.classList.remove('ring-2', 'ring-teal/60'), 1400)
+}
+
+// Split assistant text on [n] / [n][m] markers and render each marker as
+// a clickable chip. Out-of-range markers (no matching source) render as
+// dim text — better than a broken link.
+function renderWithCitations(
+  content: string,
+  sources: CitedSource[],
+  messageId: string,
+) {
+  if (!sources.length) return <>{content}</>
+
+  const parts: (string | { idx: number })[] = []
+  const re = /\[(\d+)\]/g
+  let lastEnd = 0
+  let match: RegExpExecArray | null
+  while ((match = re.exec(content)) !== null) {
+    if (match.index > lastEnd) parts.push(content.slice(lastEnd, match.index))
+    parts.push({ idx: parseInt(match[1], 10) - 1 })
+    lastEnd = match.index + match[0].length
+  }
+  if (lastEnd < content.length) parts.push(content.slice(lastEnd))
+
+  return (
+    <>
+      {parts.map((p, i) => {
+        if (typeof p === 'string') return <span key={i}>{p}</span>
+        const isValid = p.idx >= 0 && p.idx < sources.length
+        if (!isValid) {
+          return <span key={i} className="font-mono text-dim">[{p.idx + 1}]</span>
+        }
+        return (
+          <button
+            key={i}
+            onClick={() => focusSource(messageId, p.idx)}
+            className="inline-flex align-middle items-center font-mono text-2xs font-bold text-teal/90 bg-teal/8 hover:bg-teal/15 hover:text-teal border border-teal/20 hover:border-teal/40 rounded px-1 mx-0.5 transition-colors"
+            title={`Source ${p.idx + 1}: ${sources[p.idx].source}`}
+          >
+            [{p.idx + 1}]
+          </button>
+        )
+      })}
+    </>
+  )
+}
+
+// ── Source citation badge ─────────────────────────────────────────
+function SourceBadge({
+  source,
+  index,
+  messageId,
+}: {
+  source: CitedSource
+  index: number
+  messageId: string
+}) {
+  const heading = source.heading_path && source.heading_path.length
+    ? source.heading_path.join(' > ')
+    : null
+  return (
+    <div
+      id={`source-${messageId}-${index}`}
+      className="flex flex-col gap-1 px-3 py-2 bg-surface border border-border rounded-lg text-xs group hover:border-teal/30 transition-all cursor-default"
+    >
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-teal/80 font-bold">[{index + 1}]</span>
+        <span className="text-ghost truncate flex-1">{source.source}</span>
+        {source.page != null && (
+          <span className="text-dim font-mono">p.{source.page}</span>
+        )}
+        <span className="text-dim font-mono ml-auto">
+          {(source.score * 100).toFixed(0)}%
+        </span>
+      </div>
+      {heading && (
+        <p className="font-mono text-2xs text-dim truncate pl-6" title={heading}>
+          {heading}
+        </p>
+      )}
     </div>
   )
 }
@@ -54,19 +176,21 @@ function MessageBubble({ msg }: { msg: Message }) {
       <div className={clsx('flex-1 max-w-2xl', isUser && 'flex flex-col items-end')}>
         {/* Content */}
         <div className={clsx(
-          'rounded-xl px-4 py-3 text-sm leading-relaxed',
+          'rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap',
           isUser
             ? 'bg-amber/8 border border-amber/15 text-base'
             : 'bg-panel border border-border text-base'
         )}>
-          {msg.content}
+          {isUser ? msg.content : renderWithCitations(msg.content, sources, msg.id)}
         </div>
 
         {/* Sources */}
         {sources.length > 0 && (
           <div className="mt-2 w-full space-y-1">
             <p className="font-mono text-2xs text-dim uppercase tracking-widest px-1 mb-1.5">Sources</p>
-            {sources.map((s, i) => <SourceBadge key={i} source={s} index={i} />)}
+            {sources.map((s, i) => (
+              <SourceBadge key={i} source={s} index={i} messageId={msg.id} />
+            ))}
           </div>
         )}
 
@@ -138,6 +262,25 @@ export function ChatView() {
     refetchInterval: false,
   })
 
+  // Fetch workspace documents to enforce the "at least one Ready doc"
+  // guard. Poll while anything is still indexing so the composer
+  // unlocks automatically once a document finishes.
+  const { data: docsData } = useQuery({
+    queryKey: ['documents', activeWorkspaceId],
+    queryFn: () => docsApi.list(activeWorkspaceId!).then((r) => r.data),
+    enabled: !!activeWorkspaceId,
+    refetchInterval: (query) => {
+      const docs = query.state.data?.documents ?? []
+      const inFlight = docs.some(d => IN_FLIGHT_STATUSES.has(d.status))
+      return inFlight ? 4000 : false
+    },
+  })
+  const documents = docsData?.documents ?? []
+  const readyDocCount = documents.filter(d => d.status === 'completed').length
+  const indexingCount = documents.filter(d => IN_FLIGHT_STATUSES.has(d.status)).length
+  const hasReadyDoc = readyDocCount > 0
+  const composerDisabled = sse.streaming || !hasReadyDoc
+
   // Scroll to bottom on new messages
   useEffect(() => {
     if (atBottom) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -150,7 +293,7 @@ export function ChatView() {
   }
 
   const sendMessage = async (q = input.trim()) => {
-    if (!q || !activeChatId || sse.streaming) return
+    if (!q || !activeChatId || sse.streaming || !hasReadyDoc) return
     setInput('')
     textareaRef.current?.focus()
 
@@ -206,7 +349,7 @@ export function ChatView() {
         ) : (
           <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
             {messages
-              .filter(m => m.role !== 'system' && m.id !== '__temp__')
+              .filter(m => m.role !== 'system')
               .map((msg) => <MessageBubble key={msg.id} msg={msg} />)
             }
 
@@ -222,19 +365,35 @@ export function ChatView() {
                       ? <StreamingContent content={sse.content} />
                       : <span className="flex items-center gap-2 text-dim">
                           <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          Thinking…
+                          {sse.stage === 'retrieving' ? 'Searching documents…'
+                           : sse.stage === 'generating' ? 'Generating answer…'
+                           : 'Thinking…'}
                         </span>
                     }
                   </div>
+                  {sse.warnings.length > 0 && (
+                    <div className="mt-1">
+                      {sse.warnings.map((w, i) => <WarningBanner key={i} warning={w} />)}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
 
-            {/* Sources after streaming */}
+            {/* Warnings after streaming completes (no-doc / abstention) */}
+            {!sse.streaming && sse.warnings.length > 0 && (
+              <div className="pl-10 space-y-1">
+                {sse.warnings.map((w, i) => <WarningBanner key={i} warning={w} />)}
+              </div>
+            )}
+
+            {/* Sources after streaming (before the persisted message arrives) */}
             {!sse.streaming && sse.sources.length > 0 && (
               <div className="space-y-1 pl-10">
                 <p className="font-mono text-2xs text-dim uppercase tracking-widest mb-1.5">Sources</p>
-                {sse.sources.map((s, i) => <SourceBadge key={i} source={s} index={i} />)}
+                {sse.sources.map((s, i) => (
+                  <SourceBadge key={i} source={s} index={i} messageId="streaming" />
+                ))}
               </div>
             )}
 
@@ -253,12 +412,20 @@ export function ChatView() {
         </button>
       )}
 
+      {/* Error banner (rendered above the composer so it's always visible) */}
+      {sse.error && (
+        <div className="shrink-0">
+          <ErrorBanner message={sse.error} onDismiss={sse.dismissError} />
+        </div>
+      )}
+
       {/* Input area */}
       <div className="shrink-0 border-t border-border bg-surface/80 backdrop-blur-sm px-4 py-3">
         <div className="max-w-3xl mx-auto">
           <div className={clsx(
             'flex items-end gap-2 bg-panel rounded-xl border transition-all',
-            sse.streaming ? 'border-teal/20' : 'border-border focus-within:border-teal/40'
+            sse.streaming ? 'border-teal/20' : 'border-border focus-within:border-teal/40',
+            !hasReadyDoc && 'opacity-60'
           )}>
             <textarea
               ref={textareaRef}
@@ -270,17 +437,25 @@ export function ChatView() {
                   sendMessage()
                 }
               }}
-              placeholder={sse.streaming ? 'Generating…' : 'Ask anything about your documents…'}
-              disabled={sse.streaming}
+              placeholder={
+                sse.streaming
+                  ? 'Generating…'
+                  : !hasReadyDoc
+                    ? indexingCount > 0
+                      ? `Waiting for ${indexingCount} document${indexingCount === 1 ? '' : 's'} to finish indexing…`
+                      : 'Upload a document before asking questions'
+                    : 'Ask anything about your documents…'
+              }
+              disabled={composerDisabled}
               rows={1}
-              className="flex-1 bg-transparent resize-none text-sm text-base placeholder:text-dim p-3 outline-none max-h-40 leading-relaxed"
+              className="flex-1 bg-transparent resize-none text-sm text-base placeholder:text-dim p-3 outline-none max-h-40 leading-relaxed disabled:cursor-not-allowed"
             />
             <button
               onClick={() => sendMessage()}
-              disabled={!input.trim() || sse.streaming}
+              disabled={!input.trim() || composerDisabled}
               className={clsx(
                 'mb-2.5 mr-2.5 w-8 h-8 rounded-lg flex items-center justify-center transition-all',
-                input.trim() && !sse.streaming
+                input.trim() && !composerDisabled
                   ? 'bg-teal text-void hover:bg-teal/90 shadow-teal'
                   : 'bg-surface text-dim cursor-not-allowed'
               )}
@@ -292,7 +467,12 @@ export function ChatView() {
             </button>
           </div>
           <p className="mt-1.5 text-center font-mono text-2xs text-dim">
-            ⏎ send · ⇧⏎ newline · answers include source citations
+            {!hasReadyDoc && indexingCount > 0
+              ? <>indexing {indexingCount} document{indexingCount === 1 ? '' : 's'} · the composer unlocks once at least one is Ready</>
+              : !hasReadyDoc
+                ? <>upload a document to start · answers come strictly from your indexed files</>
+                : <>⏎ send · ⇧⏎ newline · {readyDocCount} document{readyDocCount === 1 ? '' : 's'} indexed · answers include source citations</>
+            }
           </p>
         </div>
       </div>

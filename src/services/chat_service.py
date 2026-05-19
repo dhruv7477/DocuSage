@@ -132,12 +132,20 @@ class ChatService:
         Persist an assistant turn to the messages table.
         Sources are serialised as JSON for display in the UI.
         """
+        # Persist the enriched citation shape so the UI can render
+        # heading paths and (eventually) link to the exact passage on a
+        # "view in document" click. The column is JSONB, so additive
+        # field changes don't need a migration.
         sources_list = [
             {
                 "document_id": s.document_id,
+                "chunk_id": getattr(s, "chunk_id", None),
                 "source": s.source_filename,
                 "page": s.page_number,
                 "score": s.relevance_score,
+                "heading_path": list(getattr(s, "heading_path", []) or []),
+                "char_start": getattr(s, "char_start", 0),
+                "char_end": getattr(s, "char_end", 0),
             }
             for s in sources
         ] if sources else None

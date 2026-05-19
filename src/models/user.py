@@ -24,6 +24,9 @@ class UserRole(str, Enum):
     ADMIN = "admin"
     MEMBER = "member"
 
+    def __str__(self) -> str:  # see MessageRole — Python 3.11 fix
+        return self.value
+
 
 class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """

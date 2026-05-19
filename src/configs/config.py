@@ -90,11 +90,14 @@ class Settings(BaseSettings):
     s3_bucket: str = "privateai-docs"
 
     # ── LLM ──────────────────────────────────────────────────────
+    # Default is qwen2.5:7b-instruct (~4.7 GB Q4_K_M) — runs on CPU on a
+    # laptop. The previous default (llama3.3:70b, ~40 GB) is unrealistic
+    # for local dev and was the silent reason every chat call failed.
     llm_provider: Literal["ollama", "vllm", "openai", "anthropic"] = "ollama"
-    llm_model: str = "llama3.3:70b"
+    llm_model: str = "qwen2.5:7b-instruct"
     llm_temperature: float = 0.1
     llm_max_tokens: int = 2048
-    llm_timeout_seconds: int = 120
+    llm_timeout_seconds: int = 300
     ollama_base_url: str = "http://localhost:11434"
     vllm_base_url: str = "http://localhost:8001/v1"
     vllm_api_key: str = "token-vllm"
@@ -104,32 +107,58 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-3-5-sonnet-20241022"
 
     # ── Embeddings ───────────────────────────────────────────────
+    # Default is BGE-small-en-v1.5 (~133 MB, 384-dim) — fits comfortably
+    # on CPU and gives strong English retrieval. BGE-M3 (1024-dim) is
+    # available as an opt-in for multilingual / higher-quality use cases
+    # but requires reindexing existing collections after the switch.
     embedding_provider: Literal["bge", "ollama", "openai", "cohere"] = "bge"
-    embedding_model: str = "BAAI/bge-m3"
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_device: Literal["cpu", "cuda", "mps"] = "cpu"
     embedding_batch_size: int = 32
-    embedding_dimension: int = 1024
+    embedding_dimension: int = 384
     ollama_embed_model: str = "nomic-embed-text"
     openai_embed_model: str = "text-embedding-3-large"
 
     # ── RAG ──────────────────────────────────────────────────────
-    rag_top_k: int = 5
-    rag_score_threshold: float = 0.5
+    # Recall-first defaults: pull a wide candidate pool with no score
+    # threshold, then let the cross-encoder reranker decide. The
+    # confidence-based abstention path (mean of top-3 reranker scores)
+    # replaces the previous hard threshold filter.
+    rag_top_k: int = 8
+    rag_score_threshold: float = 0.0
     chunk_size: int = 800
     chunk_overlap: int = 150
 
-    # ── Phase 4: Advanced Retrieval ──────────────────────────────
-    # Query rewriting strategy: none | hyd | multi
-    rewriter_strategy: str = "hyd"
+    # ── Retrieval pipeline ───────────────────────────────────────
+    # Query rewriting strategy in the legacy pipeline: none | hyd | multi.
+    # Default flipped from "hyd" to "none": HyDE adds a 2–3s LLM round-trip
+    # per query and on a local 7B model the recall lift rarely outweighs
+    # the latency. The Phase 3 rewrite replaces this with a focused
+    # standalone-question rewriter (only fires when chat history exists),
+    # gated by `enable_hyde` for the opt-in HyDE path.
+    rewriter_strategy: str = "none"
+    enable_hyde: bool = False
     # Reranker backend: none | cross_encoder | llm
     reranker: str = "cross_encoder"
-    # Cross-encoder model (sentence-transformers)
+    # Default is ms-marco-MiniLM-L-6-v2 (~22 MB) — fast on CPU (~1-2s for 20
+    # candidates). Upgrade to BAAI/bge-reranker-v2-m3 (~568 MB) for better
+    # multilingual quality if you have a GPU; on CPU it scores 22 s/batch
+    # and makes every query feel frozen.
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    # Candidates to fetch before reranking (should be > rag_top_k)
+    # Candidates fetched per retrieval branch before fusion+reranking.
+    # Kept at 20 for CPU — the reranker is O(n) so fewer candidates = faster.
     retrieval_candidate_k: int = 20
-    # Enable BM25 hybrid search alongside vector search
+    # Mean of top-3 reranker scores below this triggers an abstention
+    # signal; the prompt builder swaps to a "graceful no-answer" branch.
+    abstention_threshold: float = 0.3
+    # Enable hybrid (dense + sparse) retrieval. The Phase 3 rewrite uses a
+    # Qdrant full-text payload index; the legacy pipeline reuses this flag
+    # for its (weaker) BM25-over-vector-results fallback.
+    enable_hybrid_search: bool = True
+    # Legacy alias kept until the Phase 3 retrieval rewrite removes the
+    # old `RetrievalPipeline` that reads it.
     enable_bm25: bool = True
-    # Similarity threshold for near-duplicate deduplication
+    # Near-duplicate Jaccard threshold used by the legacy dedup stage.
     dedup_threshold: float = 0.85
 
     # ── OAuth ────────────────────────────────────────────────────
@@ -142,6 +171,20 @@ class Settings(BaseSettings):
     # ── Observability ────────────────────────────────────────────
     sentry_dsn: str = ""
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+
+    # ── Startup readiness ────────────────────────────────────────
+    # When true (default), the API refuses to start unless every
+    # required dependency (Postgres, Qdrant, Redis, MinIO, Ollama with
+    # the configured model pulled) is reachable. Set to false in tests
+    # or when intentionally booting in a degraded mode.
+    strict_startup: bool = True
+    # Per-probe timeout. 15s is generous — picked because Windows
+    # Docker Desktop's WSL2 network bridge can take 5–10s for the very
+    # first connection to a containerized dep (cold DNS + TCP setup).
+    # Once warm, real probes complete in <100ms; this only affects
+    # cold-boot. The embedder probe gets its own larger budget (max(t, 30s))
+    # because the first call may load a multi-hundred-MB model.
+    startup_probe_timeout_seconds: float = 15.0
 
     # ── Email ────────────────────────────────────────────────────
     smtp_host: str = ""

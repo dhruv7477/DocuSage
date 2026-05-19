@@ -13,6 +13,7 @@ Default model: llama3.3:70b
 Runs on: CPU (slow but works) or GPU (fast, recommended for prod)
 """
 
+import json
 from collections.abc import AsyncIterator
 
 import httpx
@@ -95,23 +96,29 @@ class OllamaProvider(BaseLLMProvider):
         payload = self._build_payload(messages, cfg, stream=True)
 
         try:
-            async with self._client.stream("POST", "/api/chat", json=payload) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line:
-                        continue
-                    import json
-                    try:
-                        chunk = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
+            # Create a fresh client per stream so the connection pool
+            # never carries state from a previous streaming request.
+            # (The shared self._client is kept for generate/health/warmup.)
+            async with httpx.AsyncClient(
+                base_url=self._base_url,
+                timeout=httpx.Timeout(self._timeout, connect=10.0),
+            ) as _stream_client:
+                async with _stream_client.stream("POST", "/api/chat", json=payload) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        try:
+                            chunk = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
 
-                    token = chunk.get("message", {}).get("content", "")
-                    if token:
-                        yield token
+                        token = chunk.get("message", {}).get("content", "")
+                        if token:
+                            yield token
 
-                    if chunk.get("done"):
-                        break
+                        if chunk.get("done"):
+                            break
 
         except httpx.HTTPStatusError as exc:
             raise LLMProviderError(
@@ -136,6 +143,29 @@ class OllamaProvider(BaseLLMProvider):
         except Exception:
             return False
 
+    async def warmup(self) -> None:
+        """
+        Load the model into Ollama's RAM without generating any text.
+
+        Ollama keeps models loaded for `keep_alive` after the last request.
+        Sending a no-prompt /api/generate at startup means the first real
+        query hits an already-warm model instead of waiting 30–90 s for the
+        weights to transfer from disk.
+        """
+        log.info("ollama_warmup_start", model=self._model)
+        try:
+            resp = await self._client.post(
+                "/api/generate",
+                json={"model": self._model, "keep_alive": "30m"},
+                timeout=httpx.Timeout(self._timeout, connect=10.0),
+            )
+            resp.raise_for_status()
+            log.info("ollama_warmup_done", model=self._model)
+        except Exception as exc:
+            # Non-fatal — the model will still load on first real request,
+            # just with more latency.
+            log.warning("ollama_warmup_failed", model=self._model, error=str(exc))
+
     async def close(self) -> None:
         await self._client.aclose()
 
@@ -148,6 +178,7 @@ class OllamaProvider(BaseLLMProvider):
             "model": self._model,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
             "stream": stream,
+            "keep_alive": "30m",
             "options": {
                 "temperature": config.temperature,
                 "num_predict": config.max_tokens,

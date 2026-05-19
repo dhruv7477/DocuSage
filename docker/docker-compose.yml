@@ -41,8 +41,12 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
-      minio:
-        condition: service_healthy
+      minio-bootstrap:
+        # Bucket must exist before document uploads can succeed.
+        condition: service_completed_successfully
+      ollama-bootstrap:
+        # Model must be pulled before chat / ingestion can call the LLM.
+        condition: service_completed_successfully
     volumes:
       - ..:/src
     networks:
@@ -118,7 +122,7 @@ services:
       - privateai-net
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6333' 2>/dev/null"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -175,7 +179,7 @@ services:
       - privateai-net
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -187,3 +191,61 @@ services:
     #         - driver: nvidia
     #           count: 1
     #           capabilities: [gpu]
+
+  # ── Ollama bootstrap: pulls the configured LLM model on first run ──
+  # Runs once and exits successfully so `api` and `worker` can depend on
+  # `service_completed_successfully`. Without this users had to remember
+  # to manually `ollama pull <model>` and the very first chat request
+  # would fail because the model wasn't downloaded.
+  ollama-bootstrap:
+    image: ollama/ollama:latest
+    container_name: privateai-ollama-bootstrap
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - privateai-net
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b-instruct}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "Ensuring Ollama model '$$LLM_MODEL' is available..."
+        if ! ollama list 2>/dev/null | awk '{print $$1}' | grep -Fxq "$$LLM_MODEL"; then
+          echo "Pulling $$LLM_MODEL (this may take a while on first run)..."
+          ollama pull "$$LLM_MODEL"
+        else
+          echo "Model $$LLM_MODEL already present."
+        fi
+    restart: "no"
+
+  # ── MinIO bootstrap: creates the application bucket on first run ──
+  # Uses the official mc client image. Idempotent — re-runs are no-ops.
+  minio-bootstrap:
+    image: minio/mc:latest
+    container_name: privateai-minio-bootstrap
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - privateai-net
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-privateai-docs}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do
+          echo "Waiting for MinIO..."; sleep 1
+        done
+        if ! mc ls "local/$$MINIO_BUCKET" >/dev/null 2>&1; then
+          echo "Creating bucket $$MINIO_BUCKET..."
+          mc mb "local/$$MINIO_BUCKET"
+        else
+          echo "Bucket $$MINIO_BUCKET already exists."
+        fi
+    restart: "no"

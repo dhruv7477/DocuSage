@@ -18,9 +18,21 @@ from src.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 
 class MessageRole(str, Enum):
+    """
+    Persisted as a plain VARCHAR(50). We override __str__ because
+    Python 3.11 changed `str(StrEnum)` from returning `self.value`
+    ("user") to the qualified name ("MessageRole.USER"), which then
+    leaks into the database column via SQLAlchemy's stringification
+    of the ORM value. The override keeps the on-disk values stable
+    regardless of Python version, so existing rows and downstream
+    consumers (LLMMessage.role, sources_json) keep working.
+    """
     USER = "user"
     ASSISTANT = "assistant"
     SYSTEM = "system"
+
+    def __str__(self) -> str:
+        return self.value
 
 
 class Chat(UUIDPrimaryKeyMixin, TimestampMixin, Base):

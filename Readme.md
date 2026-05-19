@@ -24,8 +24,9 @@ A multi-tenant, AI-powered private knowledge assistant. Upload your documents an
 | Vector DB | Qdrant |
 | Cache / Queue | Redis, Celery |
 | Object Storage | MinIO (local) or AWS S3 |
-| LLM | Ollama (local) · OpenAI · Anthropic · vLLM |
-| Embeddings | BAAI/bge-m3 (local) · OpenAI · Ollama |
+| LLM | Ollama (local, default `qwen2.5:7b-instruct`) · OpenAI · Anthropic · vLLM |
+| Embeddings | BAAI/bge-small-en-v1.5 (local default, 384-dim) · BGE-M3 (1024-dim opt-in) · OpenAI · Ollama |
+| Reranker | BAAI/bge-reranker-v2-m3 (cross-encoder) |
 
 ---
 
@@ -75,8 +76,8 @@ SECRET_KEY=change-me-to-a-random-32-char-string-minimum
 POSTGRES_PASSWORD=your_db_password
 
 # Required — choose your LLM provider
-LLM_PROVIDER=ollama          # ollama | openai | anthropic | vllm
-LLM_MODEL=llama3.2:3b        # model name for the provider above
+LLM_PROVIDER=ollama                 # ollama | openai | anthropic | vllm
+LLM_MODEL=qwen2.5:7b-instruct       # default; ~4.7 GB, runs on CPU
 
 # If using OpenAI:
 # OPENAI_API_KEY=sk-...
@@ -88,7 +89,8 @@ LLM_MODEL=llama3.2:3b        # model name for the provider above
 
 # Embeddings — bge runs locally, no API key needed
 EMBEDDING_PROVIDER=bge
-EMBEDDING_MODEL=BAAI/bge-m3
+EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+EMBEDDING_DIMENSION=384
 
 # App
 APP_ENV=development
@@ -102,36 +104,35 @@ POSTGRES_USER=docusage_user
 ### 3. Start all services
 
 ```bash
-docker compose -f docker/docker-compose.yml up --build
+make stack-up
+# equivalent to: docker compose -f docker/docker-compose.yml up --build -d
 ```
 
-This starts: API (`:8000`), PostgreSQL (`:5432`), Qdrant (`:6333`), Redis (`:6379`), MinIO (`:9000`), Ollama (`:11434`).
+This starts: API (`:8000`), PostgreSQL (`:5432`), Qdrant (`:6333`), Redis (`:6379`), MinIO (`:9000`), Ollama (`:11434`), and two one-shot bootstrap services that **create the MinIO bucket and pull the configured Ollama model**. The API waits for those bootstrap jobs to finish before booting, so the first chat request never hits a missing model or bucket.
 
-The first run downloads Docker images and the embedding model (~2 GB). This takes several minutes. Subsequent starts are fast.
+The first run downloads Docker images, the embedding model (~133 MB for BGE-small), and the LLM (~4.7 GB for `qwen2.5:7b-instruct`). This takes several minutes. Subsequent starts are fast.
 
 ### 4. Run database migrations
 
 In a second terminal, once the API container is healthy:
 
 ```bash
-docker compose -f docker/docker-compose.yml exec api alembic upgrade head
+make migrate-docker
+# equivalent to: docker compose -f docker/docker-compose.yml exec api alembic upgrade head
 ```
 
-### 5. Pull an LLM (Ollama only)
+### 5. (Optional) Use a different LLM
 
-If you chose `LLM_PROVIDER=ollama`:
+The default `qwen2.5:7b-instruct` is a balance of quality and CPU-friendliness. To use something else:
 
-```bash
-docker compose -f docker/docker-compose.yml exec ollama ollama pull llama3.2:3b
-```
-
-Replace `llama3.2:3b` with any model from [ollama.com/library](https://ollama.com/library). Larger models give better answers but need more RAM.
-
-| Model | RAM needed | Quality |
+| Model | RAM needed | Notes |
 |---|---|---|
-| `llama3.2:3b` | ~4 GB | Good for testing |
-| `llama3.1:8b` | ~8 GB | Recommended |
-| `llama3.3:70b` | ~48 GB | Best quality |
+| `qwen2.5:7b-instruct` | ~6 GB | Default; strong on instruction-following, runs on CPU |
+| `llama3.1:8b` | ~8 GB | Good general-purpose alternative |
+| `llama3.2:3b` | ~4 GB | Fastest; lower answer quality |
+| `llama3.3:70b` | ~48 GB | Best quality, requires GPU/large RAM |
+
+Set `LLM_MODEL` in `.env` and re-run `make stack-up`; the bootstrap service pulls whatever model you've configured.
 
 ### 6. Start the frontend
 
@@ -158,14 +159,15 @@ cd DocuSage
 ### 2. Start infrastructure via Docker
 
 ```bash
-docker compose -f docker/docker-compose.yml up postgres redis qdrant minio -d
+make dev-up
 ```
 
-If using Ollama locally (outside Docker), [install it](https://ollama.com/) and run:
+This starts `postgres`, `redis`, `qdrant`, `minio`, `ollama`, then runs the one-shot bootstrap services that **create the MinIO bucket and pull the configured Ollama model**. Without those bootstrap steps document upload returns HTTP 500 (no bucket) and chat fails on the first request (no model) — the previous setup made you remember to do both manually.
+
+If you prefer to run Ollama on the host instead of inside Docker, [install it](https://ollama.com/), run `ollama serve` in a terminal, then:
 
 ```bash
-ollama serve          # keep this running in a terminal
-ollama pull llama3.2:3b
+ollama pull qwen2.5:7b-instruct
 ```
 
 ### 3. Create a Python virtual environment
@@ -230,7 +232,9 @@ alembic upgrade head
 uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-On first startup the embedding model (~2 GB) is downloaded and loaded. Wait for `embedding_warmup_done` in the logs before making requests.
+On first startup the embedding model (~133 MB for BGE-small) is downloaded and the readiness probes run against every dependency. The API will refuse to boot if anything required is unreachable (set `STRICT_STARTUP=false` to disable this in dev). Watch for the `readiness_summary` log line — every probe must be `ok`.
+
+You can also call `GET /health/deep` at any time to see the live status of every dependency.
 
 ### 8. Start the Celery worker
 

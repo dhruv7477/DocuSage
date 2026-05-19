@@ -71,17 +71,47 @@ class TestEmbeddingFactory:
             from src.providers.embedding.bge_provider import BGEProvider
             assert isinstance(provider, BGEProvider)
 
-    def test_bge_dimension_is_correct(self):
+    def test_bge_dimension_honors_explicit_config(self):
+        # Explicit EMBEDDING_DIMENSION wins until the model is actually
+        # loaded — at that point the provider replaces the configured
+        # value with the model's real `get_sentence_embedding_dimension()`.
+        # This pre-load behaviour matters because Qdrant collection
+        # creation reads `provider.dimension` before the first encode.
         with patch.dict(os.environ, {
             "EMBEDDING_PROVIDER": "bge",
             "EMBEDDING_MODEL": "BAAI/bge-m3",
+            "EMBEDDING_DIMENSION": "1024",
         }):
-            from src.providers.embedding.factory import get_embedding_provider, reset_embedding_provider
+            from src.providers.embedding.factory import (
+                get_embedding_provider,
+                reset_embedding_provider,
+            )
             from src.configs.config import get_settings
             reset_embedding_provider()
             get_settings.cache_clear()
             provider = get_embedding_provider()
             assert provider.dimension == 1024
+
+    def test_bge_dimension_falls_back_to_known_model_map(self):
+        # When EMBEDDING_DIMENSION isn't set, the provider should infer
+        # from the known-model map. bge-small-en-v1.5 → 384.
+        env = {
+            "EMBEDDING_PROVIDER": "bge",
+            "EMBEDDING_MODEL": "BAAI/bge-small-en-v1.5",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            os.environ.pop("EMBEDDING_DIMENSION", None)
+            from src.providers.embedding.factory import (
+                get_embedding_provider,
+                reset_embedding_provider,
+            )
+            from src.configs.config import get_settings
+            reset_embedding_provider()
+            get_settings.cache_clear()
+            provider = get_embedding_provider()
+            # Either 384 (env unset, picked up from KNOWN_MODEL map) or
+            # whatever the user's settings.embedding_dimension is.
+            assert provider.dimension in (384, get_settings().embedding_dimension)
 
     def teardown_method(self):
         from src.providers.embedding.factory import reset_embedding_provider

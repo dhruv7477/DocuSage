@@ -1,17 +1,21 @@
 """
 tests/unit/test_rag_service.py
 ────────────────────────────────
-Unit tests for RAGService — all dependencies mocked.
-Tests the full pipeline: embed → search → build prompt → generate.
+Unit tests for the Phase 3 `RAGService` — all collaborators mocked.
+Tests the full pipeline: query-understand → hybrid retrieve → rerank →
+prompt build → LLM call.
 """
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
 from src.models.user import User, UserRole
-from src.providers.llm.base import LLMMessage, LLMResponse
+from src.providers.llm.base import LLMResponse
+from src.retrieval.hybrid import HybridRetriever
+from src.retrieval.query_understanding import QueryEnrichment
+from src.retrieval.reranker import NoOpReranker
 from src.services.rag_service import RAGService, _extract_sources
 from src.vector_store.base import SearchResult, VectorPayload
 
@@ -45,6 +49,7 @@ def _make_search_result(text: str, score: float = 0.85, doc_id: str = "doc-1") -
 def mock_embedder():
     embedder = AsyncMock()
     embedder.embed_query.return_value = [0.1] * 1024
+    embedder.embed_documents.return_value = [[0.1] * 1024]
     embedder.dimension = 1024
     return embedder
 
@@ -55,6 +60,8 @@ def mock_vector_store():
     store.search.return_value = [
         _make_search_result("The refund policy allows returns within 30 days.")
     ]
+    # Sparse branch is non-essential for these tests; empty list is fine.
+    store.text_search.return_value = []
     return store
 
 
@@ -63,7 +70,7 @@ def mock_llm():
     llm = AsyncMock()
     llm.generate.return_value = LLMResponse(
         content="Based on the documents, the refund policy is 30 days.",
-        model="llama3.3:70b",
+        model="qwen2.5:7b-instruct",
         prompt_tokens=100,
         completion_tokens=20,
     )
@@ -71,13 +78,38 @@ def mock_llm():
 
 
 @pytest.fixture
-def rag_service(mock_embedder, mock_vector_store, mock_llm):
+def mock_query_understanding():
+    qu = AsyncMock()
+
+    async def _enrich(query, history=None):
+        return QueryEnrichment(
+            original=query,
+            standalone=query,
+            queries=[query],
+            rewritten=False,
+            used_hyde=False,
+        )
+
+    qu.enrich_query = AsyncMock(side_effect=_enrich)
+    return qu
+
+
+@pytest.fixture
+def rag_service(mock_embedder, mock_vector_store, mock_llm, mock_query_understanding):
+    retriever = HybridRetriever(
+        embedder=mock_embedder,
+        vector_store=mock_vector_store,
+        candidate_k=5,
+    )
     return RAGService(
         embedder=mock_embedder,
         vector_store=mock_vector_store,
         llm=mock_llm,
+        retriever=retriever,
+        reranker=NoOpReranker(),
+        query_understanding=mock_query_understanding,
         top_k=5,
-        score_threshold=0.5,
+        abstention_threshold=0.0,  # tests don't exercise abstention
     )
 
 
@@ -121,11 +153,12 @@ class TestRAGServiceGenerate:
 
     @pytest.mark.asyncio
     async def test_no_results_still_generates(self, rag_service, mock_vector_store):
-        """When vector search returns nothing, LLM should still be called."""
+        """Empty retrieval no longer raises — the LLM is called with the abstention prompt."""
         mock_vector_store.search.return_value = []
         user = _make_user()
         response = await rag_service.generate("Unknown query", uuid.uuid4(), user)
-        assert response.answer  # LLM still called with empty context
+        assert response.answer  # LLM still called
+        assert response.abstained is True
 
     @pytest.mark.asyncio
     async def test_document_id_filter_passed_to_search(self, rag_service, mock_vector_store):

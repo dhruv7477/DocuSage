@@ -46,6 +46,12 @@ def get_embedding_provider() -> BaseEmbeddingProvider:
             model_name=settings.embedding_model,
             device=settings.embedding_device,
             batch_size=settings.embedding_batch_size,
+            # Pass through the user's configured dim so the provider's
+            # `dimension` property is correct *before* the model has
+            # loaded (e.g. when Qdrant collection creation runs first).
+            # The provider replaces this with the model's real reported
+            # dim once loaded.
+            expected_dimension=settings.embedding_dimension,
         )
 
     if provider == "openai":

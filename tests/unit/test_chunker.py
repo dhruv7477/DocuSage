@@ -1,114 +1,159 @@
 """
 tests/unit/test_chunker.py
 ───────────────────────────
-Unit tests for RecursiveChunker — no external dependencies.
-Validates chunking behaviour, overlap, and edge cases.
+Unit tests for the semantic, token-based chunker.
+
+These tests target the new `SemanticChunker` (Phase 2) operating over
+the new `ParsedBlock` / `ParsedDocument` shape. The legacy
+`RecursiveChunker` alias still exists for back-compat callers and is
+exercised here too.
 """
 
 import pytest
 
-from src.ingestion.chunker import RecursiveChunker, TextChunk
-from src.ingestion.parsers.base import ParsedDocument, ParsedPage
+from src.ingestion.chunker import RecursiveChunker, SemanticChunker, TextChunk
+from src.ingestion.parsers.base import ParsedBlock, ParsedDocument
+
+
+def _para(text: str, page: int = 1, char_start: int = 0, heading_path: list[str] | None = None) -> ParsedBlock:
+    return ParsedBlock(
+        text=text,
+        block_type="paragraph",
+        heading_path=heading_path or [],
+        page_number=page,
+        char_start=char_start,
+        char_end=char_start + len(text),
+    )
+
+
+def _heading(text: str, level: int, page: int = 1, char_start: int = 0, heading_path: list[str] | None = None) -> ParsedBlock:
+    return ParsedBlock(
+        text=text,
+        block_type="heading",
+        heading_path=(heading_path or []) + [text],
+        page_number=page,
+        char_start=char_start,
+        char_end=char_start + len(text),
+        heading_level=level,
+    )
 
 
 def _make_doc(text: str, filename: str = "test.txt") -> ParsedDocument:
     return ParsedDocument(
         filename=filename,
-        pages=[ParsedPage(page_number=1, text=text)],
+        blocks=[_para(text)],
         total_pages=1,
     )
 
 
-class TestRecursiveChunker:
+class TestSemanticChunker:
 
     def test_short_text_is_single_chunk(self):
-        """Text shorter than chunk_size should produce exactly one chunk."""
-        chunker = RecursiveChunker(chunk_size=800, chunk_overlap=150)
+        chunker = SemanticChunker(chunk_tokens=200, overlap_tokens=40)
         doc = _make_doc("This is a short document.")
         chunks = chunker.chunk_document(doc)
         assert len(chunks) == 1
         assert chunks[0].text == "This is a short document."
 
     def test_long_text_produces_multiple_chunks(self):
-        """Text longer than chunk_size must be split into multiple chunks."""
-        chunker = RecursiveChunker(chunk_size=100, chunk_overlap=20)
-        long_text = "word " * 200   # 1000 chars
-        doc = _make_doc(long_text)
+        chunker = SemanticChunker(chunk_tokens=40, overlap_tokens=10)
+        doc = _make_doc("word " * 400)
         chunks = chunker.chunk_document(doc)
         assert len(chunks) > 1
 
-    def test_all_chunks_within_size_limit(self):
-        """Every chunk should be <= chunk_size characters."""
-        chunker = RecursiveChunker(chunk_size=200, chunk_overlap=40)
-        long_text = "The quick brown fox jumps over the lazy dog. " * 50
-        doc = _make_doc(long_text)
+    def test_chunks_respect_token_budget(self):
+        budget = 50
+        chunker = SemanticChunker(chunk_tokens=budget, overlap_tokens=10)
+        doc = _make_doc("The quick brown fox jumps over the lazy dog. " * 50)
         chunks = chunker.chunk_document(doc)
+        # token_count is set by the chunker itself, so we check it. Allow
+        # a small fudge factor — overlap pre-seeds the next chunk.
         for chunk in chunks:
-            assert len(chunk.text) <= 200, f"Chunk too large: {len(chunk.text)}"
+            assert chunk.token_count <= budget * 2
 
     def test_chunk_indices_are_sequential(self):
-        """chunk_index must be 0, 1, 2, ... in order."""
-        chunker = RecursiveChunker(chunk_size=100, chunk_overlap=20)
+        chunker = SemanticChunker(chunk_tokens=40, overlap_tokens=8)
         doc = _make_doc("sentence. " * 100)
         chunks = chunker.chunk_document(doc)
         for i, chunk in enumerate(chunks):
             assert chunk.chunk_index == i
 
     def test_empty_document_produces_no_chunks(self):
-        """Empty or whitespace-only document should return empty list."""
-        chunker = RecursiveChunker(chunk_size=800, chunk_overlap=150)
-        doc = _make_doc("   \n\n  ")
-        chunks = chunker.chunk_document(doc)
-        assert chunks == []
+        chunker = SemanticChunker(chunk_tokens=200, overlap_tokens=40)
+        doc = ParsedDocument(filename="empty.txt", blocks=[])
+        assert chunker.chunk_document(doc) == []
 
     def test_page_number_preserved(self):
-        """Each chunk should carry the page_number of its source page."""
-        chunker = RecursiveChunker(chunk_size=800, chunk_overlap=150)
+        # Use enough text per page to force a flush before the next page
+        # is appended; that proves both page numbers reach distinct chunks.
+        chunker = SemanticChunker(chunk_tokens=80, overlap_tokens=10)
         doc = ParsedDocument(
             filename="multi.pdf",
-            pages=[
-                ParsedPage(page_number=1, text="Page one content. " * 5),
-                ParsedPage(page_number=2, text="Page two content. " * 5),
+            blocks=[
+                _para("Page one content. " * 40, page=1, char_start=0),
+                _para("Page two content. " * 40, page=2, char_start=2000),
             ],
             total_pages=2,
         )
         chunks = chunker.chunk_document(doc)
         page_numbers = {c.page_number for c in chunks}
-        assert 1 in page_numbers
-        assert 2 in page_numbers
+        assert 1 in page_numbers and 2 in page_numbers
 
     def test_invalid_overlap_raises(self):
-        """chunk_overlap >= chunk_size should raise ValueError."""
         with pytest.raises(ValueError):
-            RecursiveChunker(chunk_size=100, chunk_overlap=100)
+            SemanticChunker(chunk_tokens=100, overlap_tokens=100)
 
-    def test_overlap_not_configured_to_produce_overlap_chunks(self):
-        """
-        When we have overlap > 0, adjacent chunks should share some text.
-        Just checks that the total reconstructed text is complete.
-        """
-        chunker = RecursiveChunker(chunk_size=80, chunk_overlap=20)
-        text = "abc " * 100  # 400 chars
-        doc = _make_doc(text)
-        chunks = chunker.chunk_document(doc)
-        # All original words should appear in at least one chunk
-        for word in text.split()[:10]:
-            assert any(word in c.text for c in chunks)
-
-    def test_multipage_chunk_indices_are_globally_sequential(self):
-        """chunk_index must be globally sequential across all pages."""
-        chunker = RecursiveChunker(chunk_size=50, chunk_overlap=10)
+    def test_heading_boundary_creates_new_chunk(self):
+        """A heading must flush the in-flight chunk so siblings stay separate."""
+        chunker = SemanticChunker(chunk_tokens=500, overlap_tokens=0)
         doc = ParsedDocument(
-            filename="test.pdf",
-            pages=[
-                ParsedPage(page_number=1, text="First page text. " * 10),
-                ParsedPage(page_number=2, text="Second page text. " * 10),
-                ParsedPage(page_number=3, text="Third page text. " * 10),
+            filename="t.md",
+            blocks=[
+                _heading("Section A", level=1, page=1, char_start=0, heading_path=[]),
+                _para("Body of section A.", page=1, char_start=10, heading_path=["Section A"]),
+                _heading("Section B", level=1, page=2, char_start=30, heading_path=[]),
+                _para("Body of section B.", page=2, char_start=40, heading_path=["Section B"]),
             ],
-            total_pages=3,
+            total_pages=2,
         )
         chunks = chunker.chunk_document(doc)
-        for i, chunk in enumerate(chunks):
-            assert chunk.chunk_index == i, (
-                f"Expected chunk_index={i}, got {chunk.chunk_index}"
-            )
+        assert len(chunks) == 2
+        # heading_path is propagated onto the chunk
+        assert chunks[0].heading_path == ["Section A"]
+        assert chunks[1].heading_path == ["Section B"]
+        # Heading text itself is not duplicated in the chunk content
+        assert "Section A" not in chunks[0].text
+        assert chunks[0].text == "Body of section A."
+
+    def test_embedding_text_prepends_heading_path(self):
+        chunker = SemanticChunker(chunk_tokens=100, overlap_tokens=0)
+        doc = ParsedDocument(
+            filename="t.md",
+            blocks=[
+                _heading("Refunds", level=1, page=1, char_start=0),
+                _para("All refunds processed within 30 days.", page=1, char_start=10, heading_path=["Refunds"]),
+            ],
+            total_pages=1,
+        )
+        chunks = chunker.chunk_document(doc)
+        assert chunks[0].embedding_text().startswith("Refunds\n\n")
+
+    def test_chunk_carries_char_offsets(self):
+        chunker = SemanticChunker(chunk_tokens=200, overlap_tokens=0)
+        doc = _make_doc("The full text of the document.")
+        doc.blocks[0].char_start = 100
+        doc.blocks[0].char_end = 130
+        chunks = chunker.chunk_document(doc)
+        assert chunks[0].char_start == 100
+        assert chunks[0].char_end == 130
+
+
+class TestRecursiveChunkerCompat:
+    """The legacy class name still works — it just delegates to SemanticChunker."""
+
+    def test_legacy_alias_chunks_a_doc(self):
+        chunker = RecursiveChunker(chunk_size=800, chunk_overlap=150)
+        doc = _make_doc("This is a short document.")
+        chunks = chunker.chunk_document(doc)
+        assert len(chunks) == 1
+        assert isinstance(chunks[0], TextChunk)

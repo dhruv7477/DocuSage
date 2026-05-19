@@ -28,6 +28,9 @@ class WorkspaceMemberRole(str, Enum):
     ADMIN = "admin"    # Can manage members, delete workspace, upload docs
     MEMBER = "member"  # Can upload docs and query
 
+    def __str__(self) -> str:  # see MessageRole — Python 3.11 fix
+        return self.value
+
 
 class Workspace(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """

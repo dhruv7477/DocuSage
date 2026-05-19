@@ -155,6 +155,16 @@ class EmbeddingError(PrivateAIException):
     error_code = "EMBEDDING_ERROR"
 
 
+class EmbeddingDimensionMismatch(VectorStoreError):
+    """
+    Raised when an upsert attempts to write vectors of size N into a
+    Qdrant collection that was created with size M ≠ N. This happens
+    most commonly when `EMBEDDING_MODEL` is changed without reindexing.
+    The detail message includes the remediation script command.
+    """
+    error_code = "EMBEDDING_DIMENSION_MISMATCH"
+
+
 class RateLimitExceededError(PrivateAIException):
     status_code = HTTPStatus.TOO_MANY_REQUESTS.value
     error_code = "RATE_LIMIT_EXCEEDED"

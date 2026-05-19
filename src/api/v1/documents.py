@@ -43,7 +43,17 @@ async def upload_document(
     current_user: User = Depends(get_current_user),
     service: DocumentService = Depends(_get_service),
 ) -> DocumentResponse:
+    log.info(
+        "upload_request_received",
+        filename=file.filename,
+        content_type=file.content_type,
+        workspace_id=str(workspace_id),
+        user_id=str(current_user.id),
+    )
+
     content = await file.read()
+    log.info("upload_file_read", filename=file.filename, bytes=len(content))
+
     document = await service.upload_document(
         workspace_id=workspace_id,
         user=current_user,
@@ -51,11 +61,19 @@ async def upload_document(
         content=content,
         content_type=file.content_type or "application/octet-stream",
     )
+    log.info(
+        "upload_stored",
+        document_id=str(document.id),
+        filename=file.filename,
+        status=document.status.value,
+    )
 
     # Dispatch Celery ingestion task
     try:
         from src.workers.tasks import ingest_document_task
+        log.info("celery_dispatch_start", document_id=str(document.id))
         ingest_document_task.delay(str(document.id))
+        log.info("celery_dispatch_ok", document_id=str(document.id))
     except Exception as exc:
         log.error("celery_dispatch_failed", document_id=str(document.id), error=str(exc))
         document.status = DocumentStatus.FAILED

@@ -12,6 +12,8 @@ Responsibilities:
 - Health check endpoint
 """
 
+import asyncio
+import time as _time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -62,15 +64,118 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Register DB session factory on app.state so AuditMiddleware can use it
     app.state.db_session_factory = AsyncSessionLocal
 
-    # Pre-warm embedding model so it's loaded before the first request arrives
+    # Pre-warm the embedder BEFORE the readiness probes run. The first
+    # call to `model.encode()` in a thread triggers a multi-second
+    # SentenceTransformer load (and on Windows can take 60–120 s on a
+    # cold disk). If we let that happen during the readiness probe it
+    # blows the per-probe timeout. Doing it here means the embedder
+    # probe later just runs a tiny inference against an already-loaded
+    # model — completes in milliseconds.
+    _t0 = _time.monotonic()
+    log.info("STARTUP_STEP_1_embedder_warmup_start")
     try:
         from src.providers.embedding.factory import get_embedding_provider
         embedder = get_embedding_provider()
         log.info("embedding_warmup_start", provider=embedder.provider_name)
-        await embedder.health()
-        log.info("embedding_warmup_done", provider=embedder.provider_name)
+        warmup_ok = await embedder.health()
+        log.info(
+            "embedding_warmup_done",
+            provider=embedder.provider_name,
+            ok=warmup_ok,
+            dim=embedder.dimension,
+            elapsed_ms=int((_time.monotonic() - _t0) * 1000),
+        )
     except Exception as exc:
-        log.warning("embedding_warmup_failed", error=str(exc))
+        log.warning("embedding_warmup_failed", error=str(exc), elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+
+    log.info("STARTUP_STEP_2_vector_store_prewarm_start", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+    # Pre-warm provider singletons BEFORE the concurrent readiness probes.
+    #
+    # Root cause: `get_vector_store()` uses a lazy `from qdrant_client import
+    # AsyncQdrantClient` inside its @lru_cache body. On Windows, that first
+    # import loads gRPC/protobuf DLLs synchronously and takes 5–7 s on the
+    # main event-loop thread — blocking every other probe in the
+    # asyncio.gather from running until the import finishes. Redis, Qdrant,
+    # MinIO and Ollama probes all pile up and hit their 15 s timeout even
+    # though every service is healthy.
+    #
+    # Fix: call each singleton factory ONCE here (sequentially, before the
+    # gather) so by the time the probes run the cache is warm and each
+    # probe's factory call is a nanosecond dict lookup. The Qdrant store is
+    # run in a thread pool (asyncio.to_thread) so its blocking import never
+    # touches the event loop.
+    try:
+        from src.vector_store.factory import get_vector_store
+        await asyncio.to_thread(get_vector_store)   # heavy gRPC import in thread
+        log.info("vector_store_prewarm_done", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+    except Exception as exc:
+        log.warning("vector_store_prewarm_failed", error=str(exc), elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+
+    log.info("STARTUP_STEP_3_reranker_prewarm_start", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+    # Pre-warm the cross-encoder reranker BEFORE the first query arrives.
+    # On a cold cache the model download (~568 MB for bge-reranker-v2-m3)
+    # takes minutes; doing it here makes the wait visible in the startup
+    # log instead of appearing as a frozen hang on the first chat query.
+    try:
+        _rs = get_settings()
+        if _rs.reranker == "cross_encoder":
+            from src.retrieval.reranker import CrossEncoderReranker
+            await asyncio.to_thread(CrossEncoderReranker._load_model, _rs.reranker_model)
+            log.info("reranker_prewarm_done",
+                     model=_rs.reranker_model,
+                     elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+        else:
+            log.info("reranker_prewarm_skipped", strategy=_rs.reranker)
+    except Exception as exc:
+        log.warning("reranker_prewarm_failed", error=str(exc), elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+
+    log.info("STARTUP_STEP_4_llm_redis_init_start", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+    try:
+        from src.providers.llm.factory import get_llm_provider
+        _llm = get_llm_provider()                   # fast — just stores config + httpx client
+        from src.core.token_blacklist import get_redis
+        get_redis()                                 # fast — just stores aioredis client
+        log.info("provider_singletons_initialized", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+    except Exception as exc:
+        log.warning("provider_init_failed", error=str(exc), elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+        _llm = None
+
+    # Pre-load the LLM into RAM so the first query doesn't wait 30-90 s for
+    # Ollama to pull the model off disk. health() only checks /api/tags (model
+    # is pulled); warmup() sends a zero-generation request that actually loads
+    # the weights into memory and keeps them there for 30 min.
+    log.info("STARTUP_STEP_4b_llm_warmup_start", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+    try:
+        if _llm is not None and hasattr(_llm, "warmup"):
+            await _llm.warmup()
+        log.info("llm_warmup_done", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+    except Exception as exc:
+        log.warning("llm_warmup_failed", error=str(exc), elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+
+    log.info("STARTUP_STEP_5_readiness_probes_start", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+
+    # Run readiness probes against every external dependency. With
+    # STRICT_STARTUP=true (default) the app refuses to boot if anything
+    # required is unreachable, surfacing problems immediately instead of
+    # the previous behavior where requests would silently fail later.
+    from src.core.readiness import enforce_startup_readiness, StartupReadinessError
+
+    try:
+        report = await enforce_startup_readiness()
+        app.state.last_readiness_report = report
+        log.info(
+            "readiness_summary",
+            ok=report.ok,
+            probes={p.name: p.ok for p in report.probes},
+        )
+    except StartupReadinessError as exc:
+        log.error("startup_aborted_readiness", error=str(exc))
+        raise
+    except Exception as exc:
+        # Defensive: never let an unexpected probe error mask the rest
+        # of the app's startup story. Log and continue (STRICT_STARTUP
+        # already gates the actual fail-fast behavior above).
+        log.error("readiness_unexpected_error", error=str(exc))
 
     log.info(
         "app_startup",
@@ -160,10 +265,27 @@ def _register_exception_handlers(app: FastAPI) -> None:
 
 
 def _register_routers(app: FastAPI) -> None:
-    # Health check — no auth, no versioning
+    # Liveness check — proves the API process is up, no dep checks.
     @app.get("/health", tags=["Health"], include_in_schema=False)
     async def health_check() -> dict:
         return {"status": "ok", "app": settings.app_name, "env": settings.app_env}
+
+    # Deep readiness — runs every dependency probe on demand. Returns
+    # 200 when everything required is healthy, 503 otherwise. Use this
+    # from CI smoke tests, k8s readinessProbe, and ops dashboards.
+    @app.get("/health/deep", tags=["Health"], include_in_schema=False)
+    async def health_deep() -> JSONResponse:
+        from src.core.readiness import run_readiness_checks
+
+        report = await run_readiness_checks()
+        return JSONResponse(
+            status_code=(
+                status.HTTP_200_OK
+                if report.ok
+                else status.HTTP_503_SERVICE_UNAVAILABLE
+            ),
+            content=report.to_dict(),
+        )
 
     app.include_router(api_v1_router, prefix=settings.api_v1_prefix)
 

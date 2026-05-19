@@ -41,6 +41,20 @@ export interface WorkspaceDetail extends Workspace {
   members: WorkspaceMember[]
 }
 
+export type DocumentStatus =
+  | 'pending'
+  | 'processing'
+  | 'parsing'
+  | 'chunking'
+  | 'embedding'
+  | 'indexing'
+  | 'completed'
+  | 'failed'
+
+export const IN_FLIGHT_STATUSES: ReadonlySet<DocumentStatus> = new Set([
+  'pending', 'processing', 'parsing', 'chunking', 'embedding', 'indexing',
+])
+
 export interface Document {
   id: string
   workspace_id: string
@@ -49,7 +63,9 @@ export interface Document {
   original_filename: string
   file_type: string
   file_size_bytes: number
-  status: 'pending' | 'processing' | 'completed' | 'failed'
+  status: DocumentStatus
+  /** 0–100 progress through the ingestion pipeline (0 if pending/failed). */
+  progress: number
   chunk_count: number | null
   error_message: string | null
   created_at: string
@@ -78,9 +94,16 @@ export interface Message {
 
 export interface CitedSource {
   document_id: string
+  /** Stable chunk id; useful for "view exact passage" affordances. */
+  chunk_id?: string
   source: string
   page: number | null
   score: number
+  /** Heading hierarchy under which this chunk lives, e.g. ["Section 2", "2.1 Acceptable Documents"]. */
+  heading_path?: string[]
+  /** Character offset of this chunk in the original document text. */
+  char_start?: number
+  char_end?: number
 }
 
 export interface QueryResponse {

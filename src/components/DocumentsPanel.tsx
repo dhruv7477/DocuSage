@@ -8,20 +8,31 @@ import {
 import { clsx } from 'clsx'
 import { formatDistanceToNow } from 'date-fns'
 import toast from 'react-hot-toast'
-import { documents as docsApi, type Document } from '@/api'
+import { documents as docsApi, IN_FLIGHT_STATUSES, type Document, type DocumentStatus } from '@/api'
+import { getApiErrorMessage } from '@/api/client'
 import { useApp } from '@/store/app'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 // ── Status config ─────────────────────────────────────────────────
-const STATUS = {
-  pending:    { label: 'Queued',     icon: Clock,         color: 'text-amber',  bg: 'bg-amber/10 border-amber/20' },
-  processing: { label: 'Indexing',   icon: Loader2,       color: 'text-teal',   bg: 'bg-teal/10 border-teal/20', spin: true },
-  completed:  { label: 'Ready',      icon: CheckCircle2,  color: 'text-green',  bg: 'bg-green/10 border-green/20' },
-  failed:     { label: 'Failed',     icon: AlertCircle,   color: 'text-red',    bg: 'bg-red/10 border-red/20' },
-} as const
+const STATUS: Record<DocumentStatus, {
+  label: string
+  icon: typeof Clock
+  color: string
+  bg: string
+  spin?: boolean
+}> = {
+  pending:    { label: 'Queued',     icon: Clock,        color: 'text-amber',  bg: 'bg-amber/10 border-amber/20' },
+  processing: { label: 'Indexing',   icon: Loader2,      color: 'text-teal',   bg: 'bg-teal/10 border-teal/20', spin: true },
+  parsing:    { label: 'Parsing',    icon: Loader2,      color: 'text-teal',   bg: 'bg-teal/10 border-teal/20', spin: true },
+  chunking:   { label: 'Chunking',   icon: Loader2,      color: 'text-teal',   bg: 'bg-teal/10 border-teal/20', spin: true },
+  embedding:  { label: 'Embedding',  icon: Loader2,      color: 'text-teal',   bg: 'bg-teal/10 border-teal/20', spin: true },
+  indexing:   { label: 'Indexing',   icon: Loader2,      color: 'text-teal',   bg: 'bg-teal/10 border-teal/20', spin: true },
+  completed:  { label: 'Ready',      icon: CheckCircle2, color: 'text-green',  bg: 'bg-green/10 border-green/20' },
+  failed:     { label: 'Failed',     icon: AlertCircle,  color: 'text-red',    bg: 'bg-red/10 border-red/20' },
+}
 
 // ── File type icon ────────────────────────────────────────────────
-function FileIcon({ type }: { type: string }) {
+function FileIcon({ type: _type }: { type: string }) {
   return <FileText className="w-4 h-4 text-subtle" />
 }
 
@@ -36,6 +47,8 @@ function fmtBytes(b: number) {
 function DocRow({ doc, onDelete }: { doc: Document; onDelete: () => void }) {
   const s = STATUS[doc.status] ?? STATUS.pending
   const Icon = s.icon
+  const inFlight = IN_FLIGHT_STATUSES.has(doc.status)
+  const progress = Math.max(0, Math.min(100, doc.progress ?? 0))
 
   return (
     <div className="group flex flex-col px-4 py-3 border-b border-border hover:bg-surface/50 transition-colors">
@@ -67,8 +80,11 @@ function DocRow({ doc, onDelete }: { doc: Document; onDelete: () => void }) {
         <div className={clsx('flex items-center gap-1.5 px-2 py-1 rounded-full border text-xs shrink-0', s.bg, s.color)}
           title={doc.status === 'failed' && doc.error_message ? doc.error_message : undefined}
         >
-          <Icon className={clsx('w-3 h-3', 'spin' in s && s.spin && 'animate-spin')} />
+          <Icon className={clsx('w-3 h-3', s.spin && 'animate-spin')} />
           {s.label}
+          {inFlight && progress > 0 && progress < 100 && (
+            <span className="font-mono text-2xs opacity-75 ml-0.5">{progress}%</span>
+          )}
         </div>
 
         {/* Delete */}
@@ -81,6 +97,16 @@ function DocRow({ doc, onDelete }: { doc: Document; onDelete: () => void }) {
         </button>
       </div>
 
+      {/* Inline progress bar while ingesting */}
+      {inFlight && (
+        <div className="mt-2 ml-11 h-0.5 bg-border rounded-full overflow-hidden">
+          <div
+            className="h-full bg-teal transition-all duration-300 rounded-full"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+      )}
+
       {/* Error detail */}
       {doc.status === 'failed' && doc.error_message && (
         <p className="text-xs text-red mt-1.5 ml-11 leading-relaxed">{doc.error_message}</p>
@@ -90,32 +116,52 @@ function DocRow({ doc, onDelete }: { doc: Document; onDelete: () => void }) {
 }
 
 // ── Upload progress item ──────────────────────────────────────────
-interface UploadItem { name: string; progress: number; done: boolean; error: boolean }
+interface UploadItem {
+  name: string
+  progress: number
+  done: boolean
+  error: boolean
+  errorMessage?: string
+}
 
 function UploadProgress({ items }: { items: UploadItem[] }) {
   if (items.length === 0) return null
   return (
     <div className="border-b border-border">
       {items.map((item) => (
-        <div key={item.name} className="flex items-center gap-3 px-4 py-2.5 bg-teal/[0.03]">
-          <div className="w-8 h-8 rounded-lg bg-teal/10 border border-teal/20 flex items-center justify-center shrink-0">
-            <Upload className="w-3.5 h-3.5 text-teal" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-xs text-bright truncate">{item.name}</p>
+        <div
+          key={item.name}
+          className={clsx(
+            'flex flex-col gap-1 px-4 py-2.5',
+            item.error ? 'bg-red/[0.04]' : 'bg-teal/[0.03]'
+          )}
+        >
+          <div className="flex items-center gap-3">
+            <div className={clsx(
+              'w-8 h-8 rounded-lg border flex items-center justify-center shrink-0',
+              item.error ? 'bg-red/10 border-red/20' : 'bg-teal/10 border-teal/20'
+            )}>
+              <Upload className={clsx('w-3.5 h-3.5', item.error ? 'text-red' : 'text-teal')} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-bright truncate">{item.name}</p>
+              {!item.done && !item.error && (
+                <div className="mt-1 h-0.5 bg-border rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-teal transition-all duration-200 rounded-full"
+                    style={{ width: `${item.progress}%` }}
+                  />
+                </div>
+              )}
+            </div>
+            {item.done && <CheckCircle2 className="w-4 h-4 text-green shrink-0" />}
+            {item.error && <AlertCircle className="w-4 h-4 text-red shrink-0" />}
             {!item.done && !item.error && (
-              <div className="mt-1 h-0.5 bg-border rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-teal transition-all duration-200 rounded-full"
-                  style={{ width: `${item.progress}%` }}
-                />
-              </div>
+              <span className="font-mono text-2xs text-dim shrink-0">{item.progress}%</span>
             )}
           </div>
-          {item.done && <CheckCircle2 className="w-4 h-4 text-green shrink-0" />}
-          {item.error && <AlertCircle className="w-4 h-4 text-red shrink-0" />}
-          {!item.done && !item.error && (
-            <span className="font-mono text-2xs text-dim shrink-0">{item.progress}%</span>
+          {item.error && item.errorMessage && (
+            <p className="text-2xs text-red ml-11 leading-relaxed">{item.errorMessage}</p>
           )}
         </div>
       ))}
@@ -136,8 +182,8 @@ export function DocumentsPanel({ onClose }: { onClose: () => void }) {
     enabled: !!activeWorkspaceId,
     refetchInterval: (query) => {
       const docs: Document[] = query.state.data?.documents ?? []
-      const hasPending = docs.some((d) => d.status === 'pending' || d.status === 'processing')
-      return hasPending ? 4000 : false
+      const hasInFlight = docs.some((d) => IN_FLIGHT_STATUSES.has(d.status))
+      return hasInFlight ? 4000 : false
     },
   })
 
@@ -147,32 +193,41 @@ export function DocumentsPanel({ onClose }: { onClose: () => void }) {
       qc.invalidateQueries({ queryKey: ['documents', activeWorkspaceId] })
       toast.success('Document deleted')
     },
-    onError: () => toast.error('Delete failed'),
+    onError: (err) => toast.error(getApiErrorMessage(err, 'Delete failed')),
   })
 
   const onDrop = useCallback(async (files: File[]) => {
+    console.log('[DocuSage] onDrop triggered', { fileCount: files.length, activeWorkspaceId })
     if (!activeWorkspaceId) { toast.error('Select a workspace first'); return }
 
     for (const file of files) {
+      console.log('[DocuSage] uploading file', { name: file.name, size: file.size, type: file.type })
       const item: UploadItem = { name: file.name, progress: 0, done: false, error: false }
       setUploads((u) => [...u, item])
 
       try {
-        await docsApi.upload(activeWorkspaceId, file, (pct) => {
+        console.log('[DocuSage] calling docsApi.upload', { workspace: activeWorkspaceId, file: file.name })
+        const result = await docsApi.upload(activeWorkspaceId, file, (pct) => {
+          console.log('[DocuSage] upload progress', { file: file.name, pct })
           setUploads((u) => u.map((x) => x.name === file.name ? { ...x, progress: pct } : x))
         })
+        console.log('[DocuSage] upload success', { file: file.name, response: result.data })
         setUploads((u) => u.map((x) => x.name === file.name ? { ...x, done: true } : x))
         await qc.invalidateQueries({ queryKey: ['documents', activeWorkspaceId] })
         toast.success(`${file.name} queued for indexing`)
         setTimeout(() => {
           setUploads((u) => u.filter((x) => x.name !== file.name))
         }, 6000)
-      } catch {
-        setUploads((u) => u.map((x) => x.name === file.name ? { ...x, error: true } : x))
-        toast.error(`Failed to upload ${file.name}`)
+      } catch (err) {
+        const message = getApiErrorMessage(err, 'Upload failed')
+        console.error('[DocuSage] upload error', { file: file.name, message, err })
+        setUploads((u) => u.map((x) =>
+          x.name === file.name ? { ...x, error: true, errorMessage: message } : x
+        ))
+        toast.error(`${file.name}: ${message}`, { duration: 8000 })
         setTimeout(() => {
           setUploads((u) => u.filter((x) => x.name !== file.name))
-        }, 10000)
+        }, 15000)
       }
     }
   }, [activeWorkspaceId, qc])
@@ -234,7 +289,7 @@ export function DocumentsPanel({ onClose }: { onClose: () => void }) {
       )}
 
       {/* Indexing guidance banner */}
-      {docs.some(d => d.status === 'pending' || d.status === 'processing') && (
+      {docs.some(d => IN_FLIGHT_STATUSES.has(d.status)) && (
         <div className="mx-4 mt-2 mb-1 px-3 py-2 bg-amber/5 border border-amber/20 rounded-lg">
           <p className="text-xs text-amber leading-relaxed">
             Documents are indexing — they will appear in answers once status shows "Ready"

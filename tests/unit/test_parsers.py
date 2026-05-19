@@ -73,20 +73,26 @@ class TestTextParser:
         assert doc.is_empty
 
     @pytest.mark.asyncio
-    async def test_long_text_splits_into_multiple_pages(self):
-        # 10000 chars = should produce multiple logical pages
-        content = ("word " * 2000).encode()
+    async def test_long_plain_text_emits_paragraph_blocks(self):
+        # The Phase 2 parser no longer slices plain text into synthetic
+        # "pages" — paragraph splits are the structural unit. Multiple
+        # paragraphs separated by blank lines should produce multiple
+        # ParsedBlocks while staying on a single logical page.
+        body = ("word " * 200 + "\n\n") * 5
         parser = TextParser()
-        doc = await parser.parse(content, "long.txt")
-        assert doc.total_pages > 1
+        doc = await parser.parse(body.encode(), "long.txt")
+        para_blocks = [b for b in doc.blocks if b.block_type == "paragraph"]
+        assert len(para_blocks) >= 5
+        assert all(b.page_number == 1 for b in para_blocks)
 
     @pytest.mark.asyncio
-    async def test_page_numbers_sequential(self):
-        content = ("word " * 2000).encode()
+    async def test_block_char_offsets_advance(self):
+        body = "First.\n\nSecond.\n\nThird."
         parser = TextParser()
-        doc = await parser.parse(content, "long.txt")
-        for i, page in enumerate(doc.pages):
-            assert page.page_number == i + 1
+        doc = await parser.parse(body.encode(), "spans.txt")
+        offsets = [b.char_start for b in doc.blocks]
+        assert offsets == sorted(offsets)
+        assert all(b.char_end > b.char_start for b in doc.blocks)
 
 
 class TestHTMLParser:

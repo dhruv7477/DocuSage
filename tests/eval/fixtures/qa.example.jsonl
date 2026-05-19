@@ -1,0 +1,4 @@
+{"question": "What documents must an employee present on their first day to complete Form I-9?", "expected_keywords": ["List A", "List B", "List C", "passport"], "expected_doc": "i-9instr.pdf", "expected_page": null}
+{"question": "Within how many business days of hire must Form I-9 be completed?", "expected_keywords": ["three", "3", "business days"], "expected_doc": "i-9instr.pdf", "expected_page": null}
+{"question": "Who must complete Section 1 of Form I-9?", "expected_keywords": ["employee"], "expected_doc": "i-9instr.pdf", "expected_page": null}
+{"question": "What is the capital of France?", "expected_keywords": [], "expected_doc": null, "expected_page": null}

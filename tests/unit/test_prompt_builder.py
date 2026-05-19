@@ -7,11 +7,21 @@ Unit tests for PromptBuilder — pure logic, no external deps.
 import pytest
 
 from src.providers.llm.base import LLMMessage
-from src.services.prompt_builder import PromptBuilder, _estimate_tokens
+from src.services.prompt_builder import (
+    NO_ANSWER_PHRASE,
+    PromptBuilder,
+    _count_tokens,
+)
 from src.vector_store.base import SearchResult, VectorPayload
 
 
-def _make_result(text: str, source: str = "doc.pdf", page: int = 1, score: float = 0.9) -> SearchResult:
+def _make_result(
+    text: str,
+    source: str = "doc.pdf",
+    page: int = 1,
+    score: float = 0.9,
+    heading_path: list[str] | None = None,
+) -> SearchResult:
     return SearchResult(
         chunk_id="chunk-001",
         score=score,
@@ -23,6 +33,7 @@ def _make_result(text: str, source: str = "doc.pdf", page: int = 1, score: float
             text=text,
             source=source,
             page_number=page,
+            heading_path=heading_path or [],
         ),
     )
 
@@ -65,11 +76,42 @@ class TestPromptBuilder:
         )
         assert "annual_report.pdf" in result.messages[0].content
 
+    def test_heading_path_rendered_in_context(self):
+        builder = PromptBuilder()
+        result = builder.build(
+            query="Question",
+            search_results=[_make_result(
+                "Body text.",
+                heading_path=["Chapter 3", "3.2 Refunds"],
+            )],
+        )
+        # The header line should include the joined heading path.
+        assert "Chapter 3 > 3.2 Refunds" in result.messages[0].content
+
     def test_empty_results_produces_no_context_message(self):
         builder = PromptBuilder()
         result = builder.build(query="Question", search_results=[])
         assert result.context_chunks_used == 0
-        assert "No relevant documents" in result.messages[0].content
+        assert "no documents matched" in result.messages[0].content
+
+    def test_grounded_prompt_enforces_citations(self):
+        builder = PromptBuilder()
+        result = builder.build(
+            query="Q", search_results=[_make_result("X.")],
+        )
+        sys_text = result.messages[0].content
+        assert "[1]" in sys_text  # example citation form is shown
+        assert NO_ANSWER_PHRASE in sys_text
+
+    def test_abstention_swaps_to_no_answer_branch(self):
+        builder = PromptBuilder()
+        result = builder.build(
+            query="Q",
+            search_results=[],
+            abstain=True,
+        )
+        assert result.abstained is True
+        assert NO_ANSWER_PHRASE in result.messages[0].content
 
     def test_history_injected_between_system_and_user(self):
         builder = PromptBuilder()
@@ -89,11 +131,10 @@ class TestPromptBuilder:
         assert result.messages[3].content == "New question"
 
     def test_history_trimmed_by_token_budget(self):
-        builder = PromptBuilder(max_history_tokens=50)  # Very small budget
-        # Create history that exceeds budget
+        builder = PromptBuilder(max_history_tokens=10)  # Very small budget
         big_history = [
-            LLMMessage(role="user", content="A" * 300),
-            LLMMessage(role="assistant", content="B" * 300),
+            LLMMessage(role="user", content="A " * 300),
+            LLMMessage(role="assistant", content="B " * 300),
         ]
         result = builder.build(
             query="Q",
@@ -108,7 +149,6 @@ class TestPromptBuilder:
         results = [_make_result(same_text), _make_result(same_text)]
         builder = PromptBuilder()
         result = builder.build(query="Q", search_results=results)
-        # Only one copy in context
         assert result.context_chunks_used == 1
 
     def test_chunks_counted_correctly(self):
@@ -130,12 +170,11 @@ class TestPromptBuilder:
         assert result.estimated_tokens > 0
 
 
-class TestEstimateTokens:
+class TestCountTokens:
     def test_empty_string(self):
-        assert _estimate_tokens("") >= 1
+        assert _count_tokens("") >= 1
 
-    def test_four_chars_is_one_token(self):
-        assert _estimate_tokens("abcd") == 1
-
-    def test_longer_text(self):
-        assert _estimate_tokens("a" * 400) == 100
+    def test_token_count_grows_with_text(self):
+        a = _count_tokens("Hello world.")
+        b = _count_tokens("Hello world. " * 50)
+        assert b > a

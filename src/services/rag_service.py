@@ -3,38 +3,46 @@ src/services/rag_service.py
 ────────────────────────────
 RAG (Retrieval-Augmented Generation) service.
 
-This is the core intelligence of the system — it answers user questions
-by retrieving relevant document chunks and passing them to the LLM.
+Pipeline per query
+------------------
+  1. Query understanding (standalone-question rewrite if needed)
+  2. Hybrid retrieval (dense + sparse, RRF-fused)
+  3. Cross-encoder rerank → top_k chunks + confidence
+  4. Prompt build (grounded-answer or abstention branch)
+  5. Stream LLM tokens / persist sources
 
-Full pipeline per query:
-    1. Embed the user query (same model used during ingestion)
-    2. Search Qdrant with user_id + workspace_id isolation filter
-    3. Build prompt from retrieved chunks + chat history
-    4. Call LLM (blocking or streaming)
-    5. Return answer with source citations
-
-Design principles:
-- user_id isolation is ENFORCED in the SearchFilter — callers cannot
-  bypass it. The vector search will only return that user's documents.
-- Streaming is first-class: stream() is the primary path for chat UI.
-- generate() exists for internal use (query rewriting, eval pipeline).
-- Source citations are extracted from payloads — no second DB lookup needed
-  because the text and metadata are stored in Qdrant payload.
+What changed vs. the legacy service
+-----------------------------------
+* No more hard `raise VectorStoreError("No relevant documents found")`.
+  The Phase 4 prompt builder will use the abstention prompt when
+  retrieval confidence is below threshold, so the LLM produces a
+  graceful "I cannot find this in your documents." answer instead of
+  the chat UI freezing on a generic error.
+* No legacy "fall back to simple vector search" branch. Retrieval
+  always goes through the new `HybridRetriever` + reranker so behavior
+  is predictable and testable.
+* `CitedSource` carries `heading_path`, `char_start`, `char_end`,
+  `confidence` so the frontend can render rich citations and link to
+  the exact passage in the original document.
 """
+
+from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
 from src.configs.config import get_settings
-from src.core.exceptions import LLMProviderError, VectorStoreError
+from src.core.exceptions import LLMProviderError
 from src.core.logger import get_logger
 from src.models.user import User
 from src.providers.embedding.base import BaseEmbeddingProvider
 from src.providers.llm.base import BaseLLMProvider, LLMConfig
-from src.retrieval.pipeline import RetrievalPipeline
+from src.retrieval.hybrid import HybridRetriever
+from src.retrieval.query_understanding import QueryEnrichment, QueryUnderstanding
+from src.retrieval.reranker import BaseReranker, NoOpReranker, compute_confidence
 from src.services.prompt_builder import PromptBuilder
-from src.vector_store.base import BaseVectorStore, SearchFilter, SearchResult
+from src.vector_store.base import BaseVectorStore, SearchResult
 
 log = get_logger(__name__)
 settings = get_settings()
@@ -44,10 +52,14 @@ settings = get_settings()
 class CitedSource:
     """A document chunk that contributed to the answer."""
     document_id: str
+    chunk_id: str
     source_filename: str
     page_number: int
     chunk_index: int
     relevance_score: float
+    heading_path: list[str] = field(default_factory=list)
+    char_start: int = 0
+    char_end: int = 0
 
 
 @dataclass
@@ -56,15 +68,25 @@ class RAGResponse:
     answer: str
     sources: list[CitedSource] = field(default_factory=list)
     context_chunks_used: int = 0
-    query_tokens_estimated: int = 0
+    confidence: float = 0.0
+    abstained: bool = False
+
+
+@dataclass
+class _RetrievalOutcome:
+    """Internal: results carried through to the prompt-building step."""
+    results: list[SearchResult]
+    confidence: float
+    enrichment: QueryEnrichment
 
 
 class RAGService:
     """
     Retrieval-Augmented Generation service.
 
-    All dependencies are injected — fully testable with mocks.
-    Use the factory function get_rag_service() for production instances.
+    All collaborators are injected so this is trivially testable with
+    mocks (`tests/unit/test_rag_service.py`). For production wiring see
+    `src.api.v1.chat._get_rag_service()`.
     """
 
     def __init__(
@@ -73,19 +95,33 @@ class RAGService:
         vector_store: BaseVectorStore,
         llm: BaseLLMProvider,
         prompt_builder: PromptBuilder | None = None,
+        retriever: HybridRetriever | None = None,
+        reranker: BaseReranker | None = None,
+        query_understanding: QueryUnderstanding | None = None,
         top_k: int | None = None,
-        score_threshold: float | None = None,
-        retrieval_pipeline: RetrievalPipeline | None = None,
+        abstention_threshold: float | None = None,
     ) -> None:
         self._embedder = embedder
         self._vector_store = vector_store
         self._llm = llm
         self._prompt_builder = prompt_builder or PromptBuilder()
+        self._retriever = retriever or HybridRetriever(
+            embedder=embedder,
+            vector_store=vector_store,
+            candidate_k=settings.retrieval_candidate_k,
+        )
+        self._reranker = reranker or NoOpReranker()
+        self._query_understanding = query_understanding or QueryUnderstanding(
+            llm=llm, enable_hyde=settings.enable_hyde,
+        )
         self._top_k = top_k or settings.rag_top_k
-        self._score_threshold = score_threshold or settings.rag_score_threshold
-        self._pipeline = retrieval_pipeline
+        self._abstention_threshold = (
+            abstention_threshold
+            if abstention_threshold is not None
+            else settings.abstention_threshold
+        )
 
-    # ── Non-Streaming Generate ────────────────────────────────────
+    # ── Non-streaming ────────────────────────────────────────────
 
     async def generate(
         self,
@@ -95,22 +131,20 @@ class RAGService:
         history_messages: list | None = None,
         document_ids: list[str] | None = None,
     ) -> RAGResponse:
-        """
-        Full RAG pipeline — returns complete answer.
-        Use for non-chat contexts (evaluation, rewriting, admin tools).
-        """
-        search_results = await self._retrieve(
-            query, workspace_id, user, document_ids
-        )
-        if not search_results:
-            raise VectorStoreError(
-                "No relevant documents found for this query.",
-                detail="Upload and index documents before querying, or try a different question.",
-            )
-        prompt = self._prompt_builder.build(
+        outcome = await self._retrieve_and_rerank(
             query=query,
-            search_results=search_results,
+            workspace_id=workspace_id,
+            user=user,
+            history_messages=history_messages,
+            document_ids=document_ids,
+        )
+        abstained = self._is_abstaining(outcome)
+
+        prompt = self._prompt_builder.build(
+            query=outcome.enrichment.standalone,
+            search_results=outcome.results,
             history=history_messages,
+            abstain=abstained,
         )
 
         llm_config = LLMConfig(
@@ -119,17 +153,15 @@ class RAGService:
         )
 
         try:
-            llm_response = await self._llm.generate(
-                prompt.messages, llm_config
-            )
+            llm_response = await self._llm.generate(prompt.messages, llm_config)
         except LLMProviderError:
             raise
         except Exception as exc:
             raise LLMProviderError(
-                "LLM generation failed.", detail=str(exc)
+                "LLM generation failed.", detail=str(exc),
             ) from exc
 
-        sources = _extract_sources(search_results)
+        sources = _extract_sources(outcome.results)
 
         log.info(
             "rag_generate",
@@ -137,6 +169,8 @@ class RAGService:
             user_id=str(user.id),
             chunks_used=prompt.context_chunks_used,
             sources=len(sources),
+            confidence=outcome.confidence,
+            abstained=abstained,
             tokens=llm_response.total_tokens,
         )
 
@@ -144,10 +178,11 @@ class RAGService:
             answer=llm_response.content,
             sources=sources,
             context_chunks_used=prompt.context_chunks_used,
-            query_tokens_estimated=prompt.estimated_tokens,
+            confidence=outcome.confidence,
+            abstained=abstained,
         )
 
-    # ── Streaming Generate ────────────────────────────────────────
+    # ── Streaming ────────────────────────────────────────────────
 
     async def stream(
         self,
@@ -158,26 +193,29 @@ class RAGService:
         document_ids: list[str] | None = None,
     ) -> AsyncIterator[str]:
         """
-        Streaming RAG pipeline — yields text tokens as they arrive.
+        Stream tokens for the answer. Sources / abstention are not
+        emitted from this iterator — the SSE endpoint reads them off
+        `last_outcome` after the stream finishes.
 
-        Usage in FastAPI SSE endpoint:
-            async for token in rag.stream(query, workspace_id, user):
-                yield f"data: {token}\\n\\n"
-
-        The sources are sent as a final SSE event after the stream ends.
+        We deliberately stream tokens as bare strings (not SSE events)
+        so this method stays testable without an HTTP layer; the
+        endpoint wraps each token in the `{"type":"token",...}` envelope.
         """
-        search_results = await self._retrieve(
-            query, workspace_id, user, document_ids
-        )
-        if not search_results:
-            raise VectorStoreError(
-                "No relevant documents found for this query.",
-                detail="Upload and index documents before querying, or try a different question.",
-            )
-        prompt = self._prompt_builder.build(
+        outcome = await self._retrieve_and_rerank(
             query=query,
-            search_results=search_results,
+            workspace_id=workspace_id,
+            user=user,
+            history_messages=history_messages,
+            document_ids=document_ids,
+        )
+        self.last_outcome = outcome  # consumed by the SSE endpoint
+        abstained = self._is_abstaining(outcome)
+
+        prompt = self._prompt_builder.build(
+            query=outcome.enrichment.standalone,
+            search_results=outcome.results,
             history=history_messages,
+            abstain=abstained,
         )
 
         llm_config = LLMConfig(
@@ -190,6 +228,8 @@ class RAGService:
             workspace_id=str(workspace_id),
             user_id=str(user.id),
             chunks_used=prompt.context_chunks_used,
+            confidence=outcome.confidence,
+            abstained=abstained,
         )
 
         try:
@@ -199,8 +239,66 @@ class RAGService:
             raise
         except Exception as exc:
             raise LLMProviderError(
-                "LLM streaming failed.", detail=str(exc)
+                "LLM streaming failed.", detail=str(exc),
             ) from exc
+
+    async def prepare_stream(
+        self,
+        query: str,
+        workspace_id: uuid.UUID,
+        user: User,
+        history_messages: list | None = None,
+        document_ids: list[str] | None = None,
+    ) -> "tuple[_RetrievalOutcome, AsyncIterator[str]]":
+        """
+        Retrieve context and return (outcome, token_stream) together.
+
+        Preferred over stream() for the SSE endpoint — the caller gets the
+        retrieval outcome before any tokens are generated, eliminating the
+        self.last_outcome instance-state side-channel.
+        """
+        outcome = await self._retrieve_and_rerank(
+            query=query,
+            workspace_id=workspace_id,
+            user=user,
+            history_messages=history_messages,
+            document_ids=document_ids,
+        )
+        abstained = self._is_abstaining(outcome)
+
+        prompt = self._prompt_builder.build(
+            query=outcome.enrichment.standalone,
+            search_results=outcome.results,
+            history=history_messages,
+            abstain=abstained,
+        )
+
+        llm_config = LLMConfig(
+            temperature=settings.llm_temperature,
+            max_tokens=settings.llm_max_tokens,
+        )
+
+        log.info(
+            "rag_stream_start",
+            workspace_id=str(workspace_id),
+            user_id=str(user.id),
+            chunks_used=prompt.context_chunks_used,
+            confidence=outcome.confidence,
+            abstained=abstained,
+        )
+
+        async def _token_iter() -> AsyncIterator[str]:
+            try:
+                async for token in self._llm.stream(prompt.messages, llm_config):
+                    yield token
+            except LLMProviderError:
+                raise
+            except Exception as exc:
+                raise LLMProviderError(
+                    "LLM streaming failed.", detail=str(exc),
+                ) from exc
+
+        return outcome, _token_iter()
 
     async def get_sources_for_query(
         self,
@@ -209,90 +307,117 @@ class RAGService:
         user: User,
         document_ids: list[str] | None = None,
     ) -> list[CitedSource]:
-        """
-        Retrieve sources without generating an answer.
-        Used to pre-fetch citations for the streaming response.
-        """
-        results = await self._retrieve(query, workspace_id, user, document_ids)
-        return _extract_sources(results)
+        """Retrieve sources without invoking the LLM. Used for previews."""
+        outcome = await self._retrieve_and_rerank(
+            query=query,
+            workspace_id=workspace_id,
+            user=user,
+            history_messages=None,
+            document_ids=document_ids,
+        )
+        return _extract_sources(outcome.results)
 
-    # ── Private ───────────────────────────────────────────────────
+    # ── Internals ────────────────────────────────────────────────
 
-    async def _retrieve(
+    async def _retrieve_and_rerank(
         self,
+        *,
         query: str,
         workspace_id: uuid.UUID,
         user: User,
+        history_messages: list | None,
         document_ids: list[str] | None,
-    ) -> list[SearchResult]:
-        """
-        Retrieve relevant chunks via the advanced pipeline (if configured)
-        or fall back to simple vector search.
-        user_id isolation is ALWAYS enforced — it cannot be skipped.
-        """
-        if self._pipeline is not None:
-            try:
-                pipeline_result = await self._pipeline.retrieve(
-                    query=query,
-                    workspace_id=workspace_id,
-                    user=user,
-                    document_ids=document_ids,
-                )
-                return pipeline_result.results
-            except Exception as exc:
-                log.warning("pipeline_failed_falling_back", error=str(exc))
-                # Fall through to simple search
+    ) -> _RetrievalOutcome:
+        # Build the (role, content) tuples for query understanding.
+        # Only the most recent ~4 turns matter; the prompt builder owns
+        # full-history compression separately.
+        history: list[tuple[str, str]] = []
+        if history_messages:
+            for msg in history_messages[-4:]:
+                role = getattr(msg, "role", None)
+                content = getattr(msg, "content", None)
+                if role and content:
+                    history.append((str(role), str(content)))
 
-        # Simple vector search (fallback / default)
-        query_vector = await self._embedder.embed_query(query)
-
-        search_filter = SearchFilter(
-            user_id=str(user.id),
+        log.info(
+            "rag_stage_enrich",
             workspace_id=str(workspace_id),
-            document_ids=document_ids or [],
-        )
-
-        try:
-            results = await self._vector_store.search(
-                workspace_id=str(workspace_id),
-                query_vector=query_vector,
-                search_filter=search_filter,
-                top_k=self._top_k,
-                score_threshold=self._score_threshold,
-            )
-        except VectorStoreError:
-            raise
-        except Exception as exc:
-            raise VectorStoreError(
-                "Vector search failed.", detail=str(exc)
-            ) from exc
-
-        log.debug(
-            "vector_search_done",
-            query_preview=query[:50],
-            results=len(results),
             user_id=str(user.id),
+            query_preview=query[:80],
         )
-        return results
+        enrichment = await self._query_understanding.enrich_query(
+            query=query, history=history
+        )
+
+        log.info(
+            "rag_stage_retrieve",
+            workspace_id=str(workspace_id),
+            rewritten=enrichment.rewritten,
+        )
+        retrieval = await self._retriever.retrieve(
+            workspace_id=workspace_id,
+            user_id=user.id,
+            enrichment=enrichment,
+            document_ids=document_ids,
+        )
+
+        log.info(
+            "rag_stage_rerank",
+            candidates=len(retrieval.results),
+            top_k=self._top_k,
+        )
+        # Rerank against the user's *original* wording so the cross-
+        # encoder is judging answers to what the user actually asked.
+        reranked = await self._reranker.rerank(
+            query=enrichment.original,
+            results=retrieval.results,
+            top_k=self._top_k,
+        )
+        confidence = compute_confidence(reranked)
+
+        log.info(
+            "rag_stage_rerank_done",
+            reranked=len(reranked),
+            confidence=round(confidence, 3),
+        )
+        return _RetrievalOutcome(
+            results=reranked,
+            confidence=confidence,
+            enrichment=enrichment,
+        )
+
+    def _is_abstaining(self, outcome: _RetrievalOutcome) -> bool:
+        return (
+            not outcome.results
+            or outcome.confidence < self._abstention_threshold
+        )
 
 
 def _extract_sources(results: list[SearchResult]) -> list[CitedSource]:
     """
-    Convert search results to CitedSource objects for the API response.
-    Deduplicates by document_id + page_number (keeps highest score).
+    Convert search results to `CitedSource` objects.
+
+    Deduplicates by `document_id + page_number` while keeping the
+    highest score, then sorts by score descending. The chunk_id is
+    preserved on the survivor so the UI can fetch the exact passage if
+    we ever add a "view in original document" affordance.
     """
     seen: dict[str, CitedSource] = {}
-
     for result in results:
         p = result.payload
         key = f"{p.document_id}:{p.page_number}"
-        if key not in seen or result.score > seen[key].relevance_score:
-            seen[key] = CitedSource(
-                document_id=p.document_id,
-                source_filename=p.source,
-                page_number=p.page_number,
-                chunk_index=p.chunk_index,
-                relevance_score=round(result.score, 4),
-            )
-
+        new = CitedSource(
+            document_id=p.document_id,
+            chunk_id=result.chunk_id,
+            source_filename=p.source,
+            page_number=p.page_number,
+            chunk_index=p.chunk_index,
+            relevance_score=round(result.score, 4),
+            heading_path=list(p.heading_path),
+            char_start=p.char_start,
+            char_end=p.char_end,
+        )
+        existing = seen.get(key)
+        if existing is None or new.relevance_score > existing.relevance_score:
+            seen[key] = new
     return sorted(seen.values(), key=lambda s: s.relevance_score, reverse=True)

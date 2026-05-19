@@ -3,27 +3,35 @@ src/ingestion/pipeline.py
 ──────────────────────────
 Document ingestion pipeline orchestrator.
 
-Pipeline:
-    1. Download raw bytes from storage (file already uploaded by API)
-    2. Parse bytes → ParsedDocument (using ParserRegistry)
-    3. Chunk ParsedDocument → list[TextChunk]
-    4. Embed chunks in batches → list[list[float]]
-    5. Build VectorPayload for each chunk
-    6. Upsert vectors into Qdrant (workspace collection)
-    7. Update document status in PostgreSQL
+Pipeline stages, mapped to `DocumentStatus` so the UI shows the user
+exactly where a document is:
 
-Design:
-    This class coordinates all components but owns none of them.
-    Each component (parser, chunker, embedder, vector store) is injected
-    or retrieved from its factory — fully testable in isolation.
+    PARSING   → Storage download + parser run
+    CHUNKING  → Splitting parsed pages into RAG chunks
+    EMBEDDING → Computing embeddings (usually the slowest stage)
+    INDEXING  → Upserting vectors into Qdrant
+    COMPLETED → Ready to query
+    FAILED    → Terminal error; see `error_message`
 
-    Called by:
-        - Celery worker task (async execution)
-        - Direct await in tests
+Idempotency
+-----------
+Re-running ingestion for an existing document deletes its prior vectors
+from Qdrant before upserting new ones. This keeps re-uploads (same
+filename) clean even after retries or model swaps.
 
-    On failure:
-        Sets document.status = FAILED with error_message.
-        Does NOT raise — the worker logs and moves on.
+Error handling
+--------------
+Two error classes flow through this pipeline:
+
+* Transient (`StorageConnectionError`, `ConnectionError`, `TimeoutError`,
+  Ollama / Qdrant network blips) — re-raised so Celery's autoretry can
+  fire. The document stays in the most recent in-flight status; on
+  retry exhaustion the worker is responsible for the FAILED transition.
+
+* Terminal (parse error, empty document, dimension mismatch) — caught
+  here, the document is marked FAILED with a useful `error_message`,
+  and the function returns an `IngestionResult` rather than re-raising.
+  Retries on these errors don't help.
 """
 
 import uuid
@@ -31,24 +39,40 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.exceptions import (
+    EmbeddingError,
+    LLMProviderError,
+    StorageError,
+    VectorStoreError,
+)
 from src.core.logger import get_logger
-from src.ingestion.chunker import RecursiveChunker
+from src.ingestion.chunker import SemanticChunker
 from src.ingestion.parsers.registry import ParserRegistry
 from src.models.document import Document, DocumentStatus
 from src.providers.embedding.base import BaseEmbeddingProvider
-from src.services.storage_service import StorageService
-from src.vector_store.base import BaseVectorStore, SearchFilter, VectorPayload
+from src.services.storage_service import StorageConnectionError, StorageService
+from src.vector_store.base import BaseVectorStore, VectorPayload
 
 log = get_logger(__name__)
 
 
 @dataclass
 class IngestionResult:
-    """Summary of a completed ingestion run."""
+    """Summary of a completed ingestion run (terminal outcome)."""
     document_id: str
     chunks_created: int
     status: DocumentStatus
     error: str | None = None
+
+
+# Error types that signal a transient infrastructure problem. Re-raising
+# these from `run()` lets Celery's autoretry policy take over instead of
+# burning a permanent FAILED state on what is usually a network blip.
+_TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
+    StorageConnectionError,
+    ConnectionError,
+    TimeoutError,
+)
 
 
 class IngestionPipeline:
@@ -70,7 +94,16 @@ class IngestionPipeline:
         self._embedder = embedder
         self._vector_store = vector_store
         self._storage = storage
-        self._chunker = RecursiveChunker(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        # Map the legacy character-based settings onto the new
+        # token-based semantic chunker. ~4 chars / token for English.
+        approx_tokens = max(200, chunk_size // 4)
+        approx_overlap = max(40, chunk_overlap // 4)
+        if approx_overlap >= approx_tokens:
+            approx_overlap = approx_tokens // 4
+        self._chunker = SemanticChunker(
+            chunk_tokens=approx_tokens,
+            overlap_tokens=approx_overlap,
+        )
 
     async def run(
         self,
@@ -79,51 +112,77 @@ class IngestionPipeline:
     ) -> IngestionResult:
         """
         Execute the full ingestion pipeline for one document.
-        Updates document.status throughout. Never raises — logs errors.
+
+        On success: returns a COMPLETED IngestionResult.
+        On terminal failure: marks document FAILED, returns FAILED result.
+        On transient failure: re-raises so Celery can retry.
         """
         doc_id = str(document.id)
         log.info("ingestion_started", document_id=doc_id, filename=document.filename)
 
         try:
-            # ── Step 1: Mark as processing ────────────────────────
-            document.status = DocumentStatus.PROCESSING
-            await db.flush()
+            # ── Stage 1: PARSING ──────────────────────────────────
+            await self._set_progress(db, document, DocumentStatus.PARSING, 5)
 
-            # ── Step 2: Download raw bytes from storage ───────────
             raw_bytes = await self._storage.download(document.storage_path)
             log.debug("file_downloaded", document_id=doc_id, bytes=len(raw_bytes))
 
-            # ── Step 3: Parse bytes into structured pages ─────────
             parser = ParserRegistry.get(document.filename)
             parsed_doc = await parser.parse(raw_bytes, document.filename)
 
             if parsed_doc.is_empty:
-                raise ValueError(
+                # Terminal — no amount of retrying will produce text from
+                # an empty file or a fully scanned PDF without OCR.
+                raise _TerminalIngestionError(
                     f"Document '{document.filename}' produced no extractable text. "
-                    "It may be a scanned image PDF."
+                    "It may be a scanned image PDF (OCR is not yet enabled)."
                 )
 
-            # ── Step 4: Chunk into RAG-ready pieces ───────────────
+            # ── Stage 2: CHUNKING ─────────────────────────────────
+            await self._set_progress(db, document, DocumentStatus.CHUNKING, 25)
+
             chunks = self._chunker.chunk_document(parsed_doc)
             if not chunks:
-                raise ValueError("Chunking produced zero chunks.")
+                raise _TerminalIngestionError("Chunking produced zero chunks.")
 
-            log.debug(
-                "document_chunked", document_id=doc_id, chunks=len(chunks)
-            )
+            log.debug("document_chunked", document_id=doc_id, chunks=len(chunks))
 
-            # ── Step 5: Embed all chunks ──────────────────────────
-            texts = [c.text for c in chunks]
+            # ── Stage 3: EMBEDDING ────────────────────────────────
+            await self._set_progress(db, document, DocumentStatus.EMBEDDING, 45)
+
+            # Use embedding_text() — prepends "heading > path \n\n" so
+            # the embedder gets the chunk's structural context. This is
+            # the single biggest retrieval-quality win in Phase 2.
+            texts = [c.embedding_text() for c in chunks]
             vectors = await self._embedder.embed_documents(texts)
 
-            # ── Step 6: Ensure Qdrant collection exists ───────────
+            # ── Stage 4: INDEXING ─────────────────────────────────
+            await self._set_progress(db, document, DocumentStatus.INDEXING, 80)
+
             ws_id = str(document.workspace_id)
             if not await self._vector_store.collection_exists(ws_id):
                 await self._vector_store.create_collection(
                     ws_id, dimension=self._embedder.dimension
                 )
+            else:
+                # Idempotent re-index: drop any prior vectors for this
+                # document_id so re-uploads / retries don't accumulate
+                # stale chunks alongside fresh ones.
+                try:
+                    await self._vector_store.delete_document_vectors(
+                        ws_id, doc_id, str(document.user_id)
+                    )
+                except Exception as exc:
+                    # Non-fatal — worst case we end up with duplicates,
+                    # not data loss. Log and continue.
+                    log.warning(
+                        "prior_vector_cleanup_failed",
+                        document_id=doc_id,
+                        error=str(exc),
+                    )
 
-            # ── Step 7: Build payloads and upsert ────────────────
+            # Assign UUIDs first so we can stitch prev/next pointers
+            # across the new vectors before they hit Qdrant.
             chunk_ids = [str(uuid.uuid4()) for _ in chunks]
             payloads = [
                 VectorPayload(
@@ -135,8 +194,14 @@ class IngestionPipeline:
                     source=document.original_filename,
                     page_number=chunk.page_number,
                     chunk_total=len(chunks),
+                    heading_path=list(chunk.heading_path),
+                    char_start=chunk.char_start,
+                    char_end=chunk.char_end,
+                    token_count=chunk.token_count,
+                    prev_chunk_id=chunk_ids[i - 1] if i > 0 else None,
+                    next_chunk_id=chunk_ids[i + 1] if i < len(chunks) - 1 else None,
                 )
-                for chunk in chunks
+                for i, chunk in enumerate(chunks)
             ]
 
             await self._vector_store.upsert_vectors(
@@ -146,9 +211,11 @@ class IngestionPipeline:
                 payloads=payloads,
             )
 
-            # ── Step 8: Mark completed in PostgreSQL ─────────────
+            # ── Stage 5: COMPLETED ────────────────────────────────
             document.status = DocumentStatus.COMPLETED
             document.chunk_count = len(chunks)
+            document.error_message = None
+            document.progress = 100
             await db.flush()
 
             log.info(
@@ -163,18 +230,67 @@ class IngestionPipeline:
                 status=DocumentStatus.COMPLETED,
             )
 
+        except _TRANSIENT_ERRORS as exc:
+            # Don't mark FAILED — Celery will retry. Just log and bubble.
+            log.warning(
+                "ingestion_transient_error",
+                document_id=doc_id,
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+            raise
+        except _TerminalIngestionError as exc:
+            return await self._mark_failed(db, document, str(exc))
+        except (VectorStoreError, EmbeddingError, LLMProviderError, StorageError) as exc:
+            # Domain exceptions from providers — treat as terminal so the
+            # user sees a useful message. Connection-class subtypes were
+            # already caught above by _TRANSIENT_ERRORS.
+            return await self._mark_failed(db, document, exc.message)
         except Exception as exc:
-            log.error(
-                "ingestion_failed",
-                document_id=doc_id,
-                error=str(exc),
+            # Anything else — treat as terminal but keep the type in logs.
+            log.exception("ingestion_unexpected_error", document_id=doc_id)
+            return await self._mark_failed(
+                db, document, f"{type(exc).__name__}: {exc}"
             )
-            document.status = DocumentStatus.FAILED
-            document.error_message = str(exc)[:1000]
-            await db.flush()
-            return IngestionResult(
-                document_id=doc_id,
-                chunks_created=0,
-                status=DocumentStatus.FAILED,
-                error=str(exc),
-            )
+
+    # ── Private ───────────────────────────────────────────────────
+
+    async def _set_progress(
+        self,
+        db: AsyncSession,
+        document: Document,
+        status: DocumentStatus,
+        progress: int,
+    ) -> None:
+        document.status = status
+        document.progress = progress
+        await db.flush()
+
+    async def _mark_failed(
+        self,
+        db: AsyncSession,
+        document: Document,
+        message: str,
+    ) -> IngestionResult:
+        log.error(
+            "ingestion_failed",
+            document_id=str(document.id),
+            error=message,
+        )
+        document.status = DocumentStatus.FAILED
+        document.error_message = message[:1000]
+        document.progress = 0
+        await db.flush()
+        return IngestionResult(
+            document_id=str(document.id),
+            chunks_created=0,
+            status=DocumentStatus.FAILED,
+            error=message,
+        )
+
+
+class _TerminalIngestionError(Exception):
+    """
+    Internal marker for errors that shouldn't trigger a Celery retry.
+    Examples: empty PDF, unparseable encoding, dimension mismatch.
+    """

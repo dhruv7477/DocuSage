@@ -294,9 +294,18 @@ class TestSSEStreamEndpoint:
         mock_assistant_msg = MagicMock()
         mock_assistant_msg.id = uuid.uuid4()
 
-        async def fake_stream(*args, **kwargs):
-            for token in ["Hello ", "world."]:
-                yield token
+        async def fake_prepare_stream(*args, **kwargs):
+            from src.services.rag_service import _RetrievalOutcome
+            from src.retrieval.query_understanding import QueryEnrichment
+            outcome = _RetrievalOutcome(
+                results=[],
+                confidence=1.0,
+                enrichment=QueryEnrichment(original="", standalone="", queries=[], rewritten=False, used_hyde=False),
+            )
+            async def _tokens():
+                for token in ["Hello ", "world."]:
+                    yield token
+            return outcome, _tokens()
 
         with TestClient(test_app, raise_server_exceptions=False) as c:
             with patch("src.api.v1.chat.ChatService") as MockCS:
@@ -310,8 +319,8 @@ class TestSSEStreamEndpoint:
 
                 with patch("src.api.v1.chat._get_rag_service") as MockRAG:
                     mock_rag = MagicMock()
-                    mock_rag.get_sources_for_query = AsyncMock(return_value=[])
-                    mock_rag.stream = fake_stream
+                    mock_rag.prepare_stream = fake_prepare_stream
+                    mock_rag._is_abstaining = MagicMock(return_value=False)
                     MockRAG.return_value = mock_rag
 
                     with patch("src.dependencies.get_current_user", return_value=mock_user):
@@ -334,8 +343,17 @@ class TestSSEStreamEndpoint:
         mock_assistant_msg = MagicMock()
         mock_assistant_msg.id = uuid.uuid4()
 
-        async def fake_stream(*args, **kwargs):
-            yield "Hello world."
+        async def fake_prepare_stream(*args, **kwargs):
+            from src.services.rag_service import _RetrievalOutcome
+            from src.retrieval.query_understanding import QueryEnrichment
+            outcome = _RetrievalOutcome(
+                results=[],
+                confidence=1.0,
+                enrichment=QueryEnrichment(original="", standalone="", queries=[], rewritten=False, used_hyde=False),
+            )
+            async def _tokens():
+                yield "Hello world."
+            return outcome, _tokens()
 
         with TestClient(test_app, raise_server_exceptions=False) as c:
             with patch("src.api.v1.chat.ChatService") as MockCS:
@@ -349,8 +367,8 @@ class TestSSEStreamEndpoint:
 
                 with patch("src.api.v1.chat._get_rag_service") as MockRAG:
                     mock_rag = MagicMock()
-                    mock_rag.get_sources_for_query = AsyncMock(return_value=[])
-                    mock_rag.stream = fake_stream
+                    mock_rag.prepare_stream = fake_prepare_stream
+                    mock_rag._is_abstaining = MagicMock(return_value=False)
                     MockRAG.return_value = mock_rag
 
                     with patch("src.dependencies.get_current_user", return_value=mock_user):

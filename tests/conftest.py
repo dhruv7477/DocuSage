@@ -178,11 +178,25 @@ def sample_html_bytes() -> bytes:
 # ── Phase 4: Advanced Retrieval Fixtures ─────────────────────────
 
 @pytest.fixture
-def mock_rewriter():
-    """Mock QueryRewriter that returns the original query unchanged."""
-    rewriter = AsyncMock()
-    rewriter.rewrite = AsyncMock(return_value=["What is the refund policy?"])
-    return rewriter
+def mock_query_understanding():
+    """
+    Mock `QueryUnderstanding` that returns a 1-query enrichment with
+    no rewriting and no HyDE. Tests that need to exercise rewriting
+    instantiate the real class with a mock LLM.
+    """
+    from src.retrieval.query_understanding import QueryEnrichment
+
+    qu = AsyncMock()
+    async def _enrich(query: str, history: list[tuple[str, str]] | None = None):
+        return QueryEnrichment(
+            original=query,
+            standalone=query,
+            queries=[query],
+            rewritten=False,
+            used_hyde=False,
+        )
+    qu.enrich_query = AsyncMock(side_effect=_enrich)
+    return qu
 
 
 @pytest.fixture
@@ -193,34 +207,36 @@ def mock_reranker():
 
 
 @pytest.fixture
-def retrieval_pipeline(mock_embedder, mock_vector_store, mock_rewriter, mock_reranker):
-    """RetrievalPipeline with all dependencies mocked."""
-    from src.retrieval.pipeline import RetrievalPipeline
-    from src.retrieval.query_rewriter import RewriteStrategy
-    return RetrievalPipeline(
+def hybrid_retriever(mock_embedder, mock_vector_store):
+    """Real HybridRetriever wired around the mocked vector store."""
+    from src.retrieval.hybrid import HybridRetriever
+    return HybridRetriever(
         embedder=mock_embedder,
         vector_store=mock_vector_store,
-        rewriter=mock_rewriter,
-        reranker=mock_reranker,
-        rewrite_strategy=RewriteStrategy.NONE,
         candidate_k=10,
-        final_top_k=5,
-        score_threshold=0.3,
-        use_bm25=False,   # Disabled in tests — no rank_bm25 required
     )
 
 
 @pytest.fixture
-def rag_service_advanced(mock_embedder, mock_vector_store, mock_llm, retrieval_pipeline):
-    """RAGService wired with the advanced RetrievalPipeline (Phase 4)."""
+def rag_service_advanced(
+    mock_embedder,
+    mock_vector_store,
+    mock_llm,
+    hybrid_retriever,
+    mock_reranker,
+    mock_query_understanding,
+):
+    """RAGService wired with the Phase 3 retrieval stack."""
     from src.services.rag_service import RAGService
     return RAGService(
         embedder=mock_embedder,
         vector_store=mock_vector_store,
         llm=mock_llm,
+        retriever=hybrid_retriever,
+        reranker=mock_reranker,
+        query_understanding=mock_query_understanding,
         top_k=5,
-        score_threshold=0.3,
-        retrieval_pipeline=retrieval_pipeline,
+        abstention_threshold=0.0,  # tests don't exercise abstention by default
     )
 
 

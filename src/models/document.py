@@ -20,13 +20,49 @@ from src.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 
 class DocumentStatus(str, Enum):
-    PENDING = "pending"         # Uploaded, awaiting pipeline
-    PROCESSING = "processing"   # Celery worker is ingesting
-    COMPLETED = "completed"     # Vectors stored in Qdrant
-    FAILED = "failed"           # Pipeline error — see error_message
+    """
+    Granular ingestion lifecycle.
+
+    The frontend renders any non-terminal status as "indexing" with the
+    `progress` field as the bar value, so adding intermediate states is a
+    UI no-op while giving operators much better visibility on stuck jobs.
+
+    PENDING / PROCESSING are kept for backward compatibility with already-
+    persisted rows. New code should use the granular states.
+
+    `__str__` is overridden because Python 3.11 changed StrEnum
+    stringification to return the qualified name; without this override
+    SQLAlchemy persists "DocumentStatus.PENDING" instead of "pending"
+    into the VARCHAR column.
+    """
+    PENDING = "pending"          # Uploaded, awaiting pipeline pickup
+    PROCESSING = "processing"    # Generic in-flight (legacy, still valid)
+    PARSING = "parsing"          # Storage download + parser running
+    CHUNKING = "chunking"        # Splitting into RAG chunks
+    EMBEDDING = "embedding"      # Computing embeddings (often the slow stage)
+    INDEXING = "indexing"        # Upserting vectors into Qdrant
+    COMPLETED = "completed"      # Vectors stored, ready to query
+    FAILED = "failed"            # Pipeline error — see error_message
+
+    def __str__(self) -> str:
+        return self.value
+
+
+# Statuses still considered "in flight" by the frontend / readiness checks
+DOCUMENT_IN_FLIGHT_STATUSES: frozenset[DocumentStatus] = frozenset({
+    DocumentStatus.PENDING,
+    DocumentStatus.PROCESSING,
+    DocumentStatus.PARSING,
+    DocumentStatus.CHUNKING,
+    DocumentStatus.EMBEDDING,
+    DocumentStatus.INDEXING,
+})
 
 
 class DocumentType(str, Enum):
+    def __str__(self) -> str:  # noqa: D401 — see DocumentStatus comment
+        return self.value
+
     PDF = "pdf"
     DOCX = "docx"
     TXT = "txt"
@@ -70,6 +106,9 @@ class Document(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 0–100. Frontend reads this for the progress bar; the pipeline updates
+    # it after each stage so a stuck ingestion is visible.
+    progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     # ── Relationships ────────────────────────────────────────────
     workspace: Mapped["Workspace"] = relationship(  # type: ignore[name-defined]  # noqa: F821
