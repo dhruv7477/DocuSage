@@ -37,6 +37,13 @@ class CitedSourceResponse(BaseModel):
     source: str
     page: int
     score: float
+    chunk_id: str | None = None
+    heading_path: list[str] = []
+    char_start: int = 0
+    char_end: int = 0
+    text: str = ""
+
+    model_config = {"extra": "ignore"}
 
 
 class MessageResponse(BaseModel):

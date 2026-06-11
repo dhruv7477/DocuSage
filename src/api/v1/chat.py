@@ -269,6 +269,11 @@ async def query(
                 source=s.source_filename,
                 page=s.page_number,
                 score=s.relevance_score,
+                chunk_id=s.chunk_id,
+                heading_path=s.heading_path,
+                char_start=s.char_start,
+                char_end=s.char_end,
+                text=s.text,
             )
             for s in rag_response.sources
         ],
@@ -462,6 +467,7 @@ async def _sse_generator(
                     "heading_path": s.heading_path,
                     "char_start": s.char_start,
                     "char_end": s.char_end,
+                    "text": s.text,
                 }
                 for s in cited
             ],

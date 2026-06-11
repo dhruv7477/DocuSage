@@ -8,9 +8,11 @@ The API responds immediately with status=PENDING.
 The client polls GET /documents/{id} to track progress.
 """
 
+import mimetypes
 import uuid
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.logger import get_logger
@@ -112,6 +114,41 @@ async def get_document(
 ) -> DocumentResponse:
     document = await service.get_document(document_id, current_user)
     return DocumentResponse.model_validate(document)
+
+
+@router.get(
+    "/{document_id}/file",
+    summary="Stream the original uploaded file (for in-app PDF preview)",
+    response_class=Response,
+)
+async def get_document_file(
+    document_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    service: DocumentService = Depends(_get_service),
+) -> Response:
+    """
+    Returns the raw bytes of the uploaded document with the correct
+    Content-Type and an `inline` Content-Disposition so browsers render
+    it directly (used by the SourcePanel PDF viewer).
+
+    Auth: `service.get_document()` enforces user ownership — another
+    user cannot fetch this file even if they guess the UUID.
+    """
+    document = await service.get_document(document_id, current_user)
+    content = await service._storage.download(document.storage_path)
+
+    media_type = mimetypes.guess_type(document.original_filename)[0] \
+        or "application/octet-stream"
+    # RFC 5987 encoding so non-ASCII filenames survive the header.
+    quoted = quote(document.original_filename)
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f"inline; filename*=UTF-8''{quoted}",
+            "Cache-Control": "private, max-age=300",
+        },
+    )
 
 
 @router.delete(

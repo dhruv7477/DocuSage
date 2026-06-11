@@ -60,6 +60,7 @@ class CitedSource:
     heading_path: list[str] = field(default_factory=list)
     char_start: int = 0
     char_end: int = 0
+    text: str = ""
 
 
 @dataclass
@@ -416,6 +417,7 @@ def _extract_sources(results: list[SearchResult]) -> list[CitedSource]:
             heading_path=list(p.heading_path),
             char_start=p.char_start,
             char_end=p.char_end,
+            text=p.text,
         )
         existing = seen.get(key)
         if existing is None or new.relevance_score > existing.relevance_score:

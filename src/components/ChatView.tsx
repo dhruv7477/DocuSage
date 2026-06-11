@@ -12,6 +12,8 @@ import {
 } from '@/api'
 import { useApp } from '@/store/app'
 import { useSSE, type StreamWarning } from '@/hooks/useSSE'
+import { CitationLens } from './CitationLens'
+import { SourcePanel } from './SourcePanel'
 
 // ── Typewriter-style streaming cursor ────────────────────────────
 function StreamingContent({ content }: { content: string }) {
@@ -79,6 +81,7 @@ function renderWithCitations(
   content: string,
   sources: CitedSource[],
   messageId: string,
+  userQuery?: string,
 ) {
   if (!sources.length) return <>{content}</>
 
@@ -101,15 +104,19 @@ function renderWithCitations(
         if (!isValid) {
           return <span key={i} className="font-mono text-dim">[{p.idx + 1}]</span>
         }
-        return (
+        const chip = (
           <button
-            key={i}
             onClick={() => focusSource(messageId, p.idx)}
             className="inline-flex align-middle items-center font-mono text-2xs font-bold text-teal/90 bg-teal/8 hover:bg-teal/15 hover:text-teal border border-teal/20 hover:border-teal/40 rounded px-1 mx-0.5 transition-colors"
             title={`Source ${p.idx + 1}: ${sources[p.idx].source}`}
           >
             [{p.idx + 1}]
           </button>
+        )
+        return (
+          <CitationLens key={i} source={sources[p.idx]} query={userQuery}>
+            {chip}
+          </CitationLens>
         )
       })}
     </>
@@ -154,7 +161,7 @@ function SourceBadge({
 }
 
 // ── Message bubble ────────────────────────────────────────────────
-function MessageBubble({ msg }: { msg: Message }) {
+function MessageBubble({ msg, userQuery }: { msg: Message; userQuery?: string }) {
   const isUser = msg.role === 'user'
   const sources: CitedSource[] = msg.sources_json ?? []
 
@@ -181,7 +188,7 @@ function MessageBubble({ msg }: { msg: Message }) {
             ? 'bg-amber/8 border border-amber/15 text-base'
             : 'bg-panel border border-border text-base'
         )}>
-          {isUser ? msg.content : renderWithCitations(msg.content, sources, msg.id)}
+          {isUser ? msg.content : renderWithCitations(msg.content, sources, msg.id, userQuery)}
         </div>
 
         {/* Sources */}
@@ -334,6 +341,7 @@ export function ChatView() {
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
+      <SourcePanel />
       {/* Messages */}
       <div
         ref={scrollRef}
@@ -348,10 +356,21 @@ export function ChatView() {
           <EmptyChat onSend={sendMessage} />
         ) : (
           <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
-            {messages
-              .filter(m => m.role !== 'system')
-              .map((msg) => <MessageBubble key={msg.id} msg={msg} />)
-            }
+            {(() => {
+              const visible = messages.filter(m => m.role !== 'system')
+              return visible.map((msg, idx) => {
+                let userQuery: string | undefined
+                if (msg.role === 'assistant') {
+                  for (let j = idx - 1; j >= 0; j--) {
+                    if (visible[j].role === 'user') {
+                      userQuery = visible[j].content
+                      break
+                    }
+                  }
+                }
+                return <MessageBubble key={msg.id} msg={msg} userQuery={userQuery} />
+              })
+            })()}
 
             {/* Streaming response */}
             {sse.streaming && (

@@ -146,6 +146,7 @@ class ChatService:
                 "heading_path": list(getattr(s, "heading_path", []) or []),
                 "char_start": getattr(s, "char_start", 0),
                 "char_end": getattr(s, "char_end", 0),
+                "text": getattr(s, "text", "") or "",
             }
             for s in sources
         ] if sources else None

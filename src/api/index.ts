@@ -104,6 +104,8 @@ export interface CitedSource {
   /** Character offset of this chunk in the original document text. */
   char_start?: number
   char_end?: number
+  /** Chunk text — used by the hover lens to show the source passage with query terms highlighted. */
+  text?: string
 }
 
 export interface QueryResponse {
@@ -174,6 +176,10 @@ export const documents = {
   },
 
   get: (id: string) => api.get<Document>(`/documents/${id}`),
+
+  /** Fetch the original file bytes; used by SourcePanel to feed pdfjs. */
+  file: (id: string) =>
+    api.get<ArrayBuffer>(`/documents/${id}/file`, { responseType: 'arraybuffer' }),
 
   delete: (id: string) => api.delete(`/documents/${id}`),
 }
