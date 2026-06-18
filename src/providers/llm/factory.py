@@ -38,15 +38,42 @@ def get_llm_provider() -> BaseLLMProvider:
         ValueError: if LLM_PROVIDER is set to an unsupported value.
     """
     settings = get_settings()
+    # OpenAI uses its own model setting; ollama/vllm use llm_model.
+    model = (
+        settings.openai_model
+        if settings.llm_provider == "openai"
+        else settings.llm_model
+    )
+    return _build_llm_provider(model)
+
+
+@lru_cache(maxsize=1)
+def get_router_llm_provider() -> BaseLLMProvider:
+    """
+    Small, fast model dedicated to intent classification (the Question
+    Analyzer routes every non-heuristic message through it).
+
+    Kept separate from get_llm_provider() so classification runs on a
+    ~1 GB model (router_model) instead of the 7B answer model — routing
+    every message then costs a few seconds on CPU instead of ~90s.
+    Falls back to the main answer model if router_model is unset.
+    """
+    settings = get_settings()
+    return _build_llm_provider(settings.router_model or settings.llm_model)
+
+
+def _build_llm_provider(model: str) -> BaseLLMProvider:
+    """Construct a provider for the active backend pinned to `model`."""
+    settings = get_settings()
     provider = settings.llm_provider
 
-    log.info("llm_provider_init", provider=provider, model=settings.llm_model)
+    log.info("llm_provider_init", provider=provider, model=model)
 
     if provider == "ollama":
         from src.providers.llm.ollama_provider import OllamaProvider
         return OllamaProvider(
             base_url=settings.ollama_base_url,
-            model=settings.llm_model,
+            model=model,
             timeout=settings.llm_timeout_seconds,
         )
 
@@ -55,7 +82,7 @@ def get_llm_provider() -> BaseLLMProvider:
         return VLLMProvider(
             base_url=settings.vllm_base_url,
             api_key=settings.vllm_api_key,
-            model=settings.llm_model,
+            model=model,
             timeout=settings.llm_timeout_seconds,
         )
 
@@ -63,7 +90,7 @@ def get_llm_provider() -> BaseLLMProvider:
         from src.providers.llm.openai_provider import OpenAIProvider
         return OpenAIProvider(
             api_key=settings.openai_api_key,
-            model=settings.openai_model,
+            model=model,
             timeout=settings.llm_timeout_seconds,
         )
 
@@ -74,5 +101,6 @@ def get_llm_provider() -> BaseLLMProvider:
 
 
 def reset_llm_provider() -> None:
-    """Clear the cached provider. Used in tests to swap providers."""
+    """Clear the cached providers. Used in tests to swap providers."""
     get_llm_provider.cache_clear()
+    get_router_llm_provider.cache_clear()

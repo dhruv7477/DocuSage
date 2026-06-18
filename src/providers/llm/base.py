@@ -39,6 +39,9 @@ class LLMConfig:
     max_tokens: int = 2048
     top_p: float = 0.95
     stop_sequences: list[str] = field(default_factory=list)
+    # "json" → provider-native structured output mode (Ollama `format: json`).
+    # Providers that don't support it simply ignore the field.
+    response_format: str | None = None
 
 
 @dataclass

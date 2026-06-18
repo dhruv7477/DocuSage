@@ -61,17 +61,17 @@ function DocRow({ doc, onDelete }: { doc: Document; onDelete: () => void }) {
         {/* Info */}
         <div className="flex-1 min-w-0">
           <p className="text-sm text-bright font-medium truncate">{doc.original_filename}</p>
-          <div className="flex items-center gap-2 mt-0.5">
-            <span className="font-mono text-2xs text-dim">{fmtBytes(doc.file_size_bytes)}</span>
+          {/* whitespace-nowrap per chip + flex-wrap on the row: in the
+              narrow panel the chips flow onto a second line as whole
+              units instead of each phrase wrapping mid-text into
+              unreadable vertical slivers. */}
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 mt-0.5">
+            <span className="font-mono text-2xs text-dim whitespace-nowrap">{fmtBytes(doc.file_size_bytes)}</span>
             {doc.chunk_count != null && (
-              <>
-                <span className="text-dim">·</span>
-                <span className="font-mono text-2xs text-dim">{doc.chunk_count} chunks</span>
-              </>
+              <span className="font-mono text-2xs text-dim whitespace-nowrap">· {doc.chunk_count} chunks</span>
             )}
-            <span className="text-dim">·</span>
-            <span className="font-mono text-2xs text-dim">
-              {formatDistanceToNow(new Date(doc.created_at), { addSuffix: true })}
+            <span className="font-mono text-2xs text-dim whitespace-nowrap">
+              · {formatDistanceToNow(new Date(doc.created_at), { addSuffix: true })}
             </span>
           </div>
         </div>

@@ -158,6 +158,33 @@ class BaseVectorStore(ABC):
         """
         raise NotImplementedError("This vector store does not support text search.")
 
+    async def list_document_chunks(
+        self,
+        workspace_id: str,
+        document_id: str,
+        user_id: str,
+    ) -> list["SearchResult"]:
+        """
+        Return every chunk of one document (ordered by chunk_index),
+        within the user's isolation filter. Powers the doc-summary
+        route, which needs the full document text rather than a search.
+        Default raises so legacy stores keep working.
+        """
+        raise NotImplementedError("This vector store does not support chunk listing.")
+
+    async def get_chunk(
+        self,
+        workspace_id: str,
+        chunk_id: str,
+        user_id: str,
+    ) -> "SearchResult | None":
+        """
+        Fetch a single chunk by its point id. Returns None when the
+        chunk doesn't exist or belongs to another user (ownership is
+        enforced at the store layer — defence in depth).
+        """
+        raise NotImplementedError("This vector store does not support chunk lookup.")
+
     @abstractmethod
     async def health(self) -> bool:
         """Returns True if the vector store is reachable."""

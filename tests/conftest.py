@@ -19,6 +19,19 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 # ── Environment Setup (must happen before any app imports) ────────
+# Load the developer's real .env FIRST so integration/smoke tests run
+# against the actual local stack (correct DB password, model names...).
+# The setdefault() calls below only fill gaps — they are the CI
+# fallback for environments with no .env file. Previously the
+# defaults overrode .env (wrong POSTGRES_PASSWORD), which made every
+# DB-touching test fail with "password authentication failed".
+try:
+    from dotenv import load_dotenv
+    from pathlib import Path
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+except ImportError:  # pragma: no cover — python-dotenv ships with pydantic-settings
+    pass
+
 os.environ.setdefault("APP_ENV", "development")
 os.environ.setdefault("APP_DEBUG", "true")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-that-is-long-enough-32chars")
@@ -26,12 +39,15 @@ os.environ.setdefault("POSTGRES_PASSWORD", "testpassword")
 os.environ.setdefault("POSTGRES_HOST", "localhost")
 os.environ.setdefault("POSTGRES_DB", "privateai_test")
 os.environ.setdefault("LLM_PROVIDER", "ollama")
-os.environ.setdefault("LLM_MODEL", "llama3.3:70b")
+os.environ.setdefault("LLM_MODEL", "qwen2.5:7b-instruct")
 os.environ.setdefault("EMBEDDING_PROVIDER", "bge")
-os.environ.setdefault("EMBEDDING_MODEL", "BAAI/bge-m3")
+os.environ.setdefault("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
 os.environ.setdefault("EMBEDDING_DEVICE", "cpu")
 os.environ.setdefault("VECTOR_STORE", "qdrant")
 os.environ.setdefault("STORAGE_BACKEND", "minio")
+# Tests must never hard-abort on missing deps regardless of what .env
+# says — readiness failures should surface per-test, not at app boot.
+os.environ["STRICT_STARTUP"] = "false"
 
 
 @pytest.fixture

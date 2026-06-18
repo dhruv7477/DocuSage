@@ -32,6 +32,69 @@ class TestLLMFactory:
             from src.providers.llm.ollama_provider import OllamaProvider
             assert isinstance(provider, OllamaProvider)
 
+    def test_router_provider_uses_router_model(self):
+        # The intent classifier runs on its own small model, distinct from
+        # the answer model — so routing every message stays cheap.
+        with patch.dict(os.environ, {
+            "LLM_PROVIDER": "ollama",
+            "LLM_MODEL": "qwen2.5:7b-instruct",
+            "ROUTER_MODEL": "qwen2.5:1.5b-instruct",
+        }):
+            from src.providers.llm.factory import (
+                get_llm_provider,
+                get_router_llm_provider,
+                reset_llm_provider,
+            )
+            from src.configs.config import get_settings
+            reset_llm_provider()
+            get_settings.cache_clear()
+
+            from src.providers.llm.ollama_provider import OllamaProvider
+            router = get_router_llm_provider()
+            answer = get_llm_provider()
+            assert isinstance(router, OllamaProvider)
+            assert router._model == "qwen2.5:1.5b-instruct"
+            assert answer._model == "qwen2.5:7b-instruct"
+            assert router is not answer
+
+    def test_router_provider_falls_back_to_answer_model_when_unset(self):
+        # An empty ROUTER_MODEL means "reuse the answer model" rather than
+        # erroring — so the router still works if a user clears the setting.
+        with patch.dict(os.environ, {
+            "LLM_PROVIDER": "ollama",
+            "LLM_MODEL": "qwen2.5:7b-instruct",
+            "ROUTER_MODEL": "",
+        }):
+            from src.providers.llm.factory import (
+                get_router_llm_provider,
+                reset_llm_provider,
+            )
+            from src.configs.config import get_settings
+            reset_llm_provider()
+            get_settings.cache_clear()
+
+            router = get_router_llm_provider()
+            assert router._model == "qwen2.5:7b-instruct"
+
+    def test_router_provider_is_cached_and_reset_clears_it(self):
+        with patch.dict(os.environ, {
+            "LLM_PROVIDER": "ollama",
+            "LLM_MODEL": "qwen2.5:7b-instruct",
+            "ROUTER_MODEL": "qwen2.5:1.5b-instruct",
+        }):
+            from src.providers.llm.factory import (
+                get_router_llm_provider,
+                reset_llm_provider,
+            )
+            from src.configs.config import get_settings
+            reset_llm_provider()
+            get_settings.cache_clear()
+
+            first = get_router_llm_provider()
+            assert get_router_llm_provider() is first  # cached singleton
+            reset_llm_provider()
+            assert get_router_llm_provider() is not first  # cache cleared
+
     def test_invalid_provider_raises(self):
         with patch.dict(os.environ, {"LLM_PROVIDER": "nonexistent"}):
             from src.providers.llm.factory import reset_llm_provider

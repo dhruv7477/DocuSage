@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
+import { motion } from 'framer-motion'
 import { Send, Bot, User, Loader2, Sparkles, ChevronDown, AlertTriangle, Info, X } from 'lucide-react'
 import { clsx } from 'clsx'
 import { formatDistanceToNow } from 'date-fns'
@@ -14,6 +15,8 @@ import { useApp } from '@/store/app'
 import { useSSE, type StreamWarning } from '@/hooks/useSSE'
 import { CitationLens } from './CitationLens'
 import { SourcePanel } from './SourcePanel'
+import { ThinkingStatus } from './ThinkingStatus'
+import { MessagesSkeleton } from './Skeletons'
 
 // ── Typewriter-style streaming cursor ────────────────────────────
 function StreamingContent({ content }: { content: string }) {
@@ -166,7 +169,12 @@ function MessageBubble({ msg, userQuery }: { msg: Message; userQuery?: string })
   const sources: CitedSource[] = msg.sources_json ?? []
 
   return (
-    <div className={clsx('flex gap-3 animate-fade-up', isUser && 'flex-row-reverse')}>
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25, ease: 'easeOut' }}
+      className={clsx('flex gap-3', isUser && 'flex-row-reverse')}
+    >
       {/* Avatar */}
       <div className={clsx(
         'w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5',
@@ -206,7 +214,7 @@ function MessageBubble({ msg, userQuery }: { msg: Message; userQuery?: string })
           {formatDistanceToNow(new Date(msg.created_at), { addSuffix: true })}
         </p>
       </div>
-    </div>
+    </motion.div>
   )
 }
 
@@ -256,7 +264,6 @@ export function ChatView() {
   const { activeChatId, activeWorkspaceId } = useApp()
   const [input, setInput] = useState('')
   const [atBottom, setAtBottom] = useState(true)
-  const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const qc = useQueryClient()
@@ -265,9 +272,28 @@ export function ChatView() {
   const { data: messages = [], isLoading } = useQuery({
     queryKey: ['messages', activeChatId],
     queryFn: () => chatApi.messages(activeChatId!).then((r) => r.data),
-    enabled: !!activeChatId,
+    enabled: !!activeChatId && activeChatId !== '__optimistic__',
     refetchInterval: false,
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
   })
+
+  // Kill any in-flight stream when the user switches chats — without
+  // this, tokens from chat A keep painting into chat B's view.
+  useEffect(() => {
+    sse.reset()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChatId])
+
+  // On stream error, the backend has already committed the user message
+  // (it commits before generation). The 'done' path invalidates messages;
+  // the error path doesn't, so the optimistic __temp__ row would linger and
+  // then vanish on the next refetch. Refetch here so the persisted user
+  // message replaces the temp row and the failed turn stays visible.
+  useEffect(() => {
+    if (!sse.error || !activeChatId) return
+    qc.invalidateQueries({ queryKey: ['messages', activeChatId] })
+  }, [sse.error, activeChatId, qc])
 
   // Fetch workspace documents to enforce the "at least one Ready doc"
   // guard. Poll while anything is still indexing so the composer
@@ -288,10 +314,41 @@ export function ChatView() {
   const hasReadyDoc = readyDocCount > 0
   const composerDisabled = sse.streaming || !hasReadyDoc
 
-  // Scroll to bottom on new messages
+  // Container-scoped scroll. scrollIntoView() walks up and scrolls *every*
+  // scrollable ancestor — including document.body — to reveal the target.
+  // With overflow:hidden on the body that drag is unrecoverable: the whole
+  // shell ends up stranded above the viewport. Writing scrollTop on the
+  // list element itself can only ever move the list.
+  const scrollToBottom = useCallback((behavior: ScrollBehavior) => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior })
+  }, [])
+
+  // Scroll to bottom on new messages. rAF-throttled; instant during
+  // streaming (smooth-scroll jitters at 10-15 tokens/s), smooth otherwise.
   useEffect(() => {
-    if (atBottom) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, sse.content, atBottom])
+    if (!atBottom) return
+    const id = requestAnimationFrame(() => {
+      scrollToBottom(sse.streaming ? 'auto' : 'smooth')
+    })
+    return () => cancelAnimationFrame(id)
+  }, [messages, sse.content, atBottom, sse.streaming, scrollToBottom])
+
+  // Hard-jump to the end when opening/switching chats or when the real
+  // data replaces placeholderData. keepPreviousData keeps the previous
+  // thread's scroll geometry; without this the view can be stranded
+  // past the end of a shorter thread (lone timestamp at the top,
+  // emptiness below).
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const id = requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight
+      setAtBottom(true)
+    })
+    return () => cancelAnimationFrame(id)
+  }, [activeChatId, isLoading])
 
   const handleScroll = () => {
     const el = scrollRef.current
@@ -300,7 +357,9 @@ export function ChatView() {
   }
 
   const sendMessage = async (q = input.trim()) => {
-    if (!q || !activeChatId || sse.streaming || !hasReadyDoc) return
+    // '__optimistic__' is the placeholder id while chat creation is in
+    // flight — block sends until the real id arrives.
+    if (!q || !activeChatId || activeChatId === '__optimistic__' || sse.streaming || !hasReadyDoc) return
     setInput('')
     textareaRef.current?.focus()
 
@@ -346,12 +405,10 @@ export function ChatView() {
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto"
+        className="flex-1 min-h-0 overflow-y-auto overscroll-contain"
       >
         {isLoading ? (
-          <div className="flex justify-center py-12">
-            <Loader2 className="w-5 h-5 text-teal animate-spin" />
-          </div>
+          <MessagesSkeleton />
         ) : messages.filter(m => m.id !== '__temp__').length === 0 && !sse.streaming ? (
           <EmptyChat onSend={sendMessage} />
         ) : (
@@ -382,13 +439,15 @@ export function ChatView() {
                   <div className="rounded-xl px-4 py-3 text-sm leading-relaxed bg-panel border border-teal/20">
                     {sse.content
                       ? <StreamingContent content={sse.content} />
-                      : <span className="flex items-center gap-2 text-dim">
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          {sse.stage === 'retrieving' ? 'Searching documents…'
-                           : sse.stage === 'generating' ? 'Generating answer…'
-                           : 'Thinking…'}
-                        </span>
+                      : <ThinkingStatus stage={sse.stage} startedAt={sse.startedAt} />
                     }
+                    {/* Post-generation validation runs after the last token —
+                        keep the status line visible below the answer. */}
+                    {sse.content && sse.stage === 'validating' && (
+                      <div className="mt-2 pt-2 border-t border-border/50">
+                        <ThinkingStatus stage={sse.stage} startedAt={sse.startedAt} />
+                      </div>
+                    )}
                   </div>
                   {sse.warnings.length > 0 && (
                     <div className="mt-1">
@@ -415,8 +474,6 @@ export function ChatView() {
                 ))}
               </div>
             )}
-
-            <div ref={bottomRef} />
           </div>
         )}
       </div>
@@ -424,7 +481,7 @@ export function ChatView() {
       {/* Scroll to bottom button */}
       {!atBottom && (
         <button
-          onClick={() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' })}
+          onClick={() => scrollToBottom('smooth')}
           className="absolute bottom-24 right-8 w-8 h-8 rounded-full bg-panel border border-border text-subtle hover:text-base shadow-panel flex items-center justify-center z-10 transition-colors"
         >
           <ChevronDown className="w-4 h-4" />
@@ -439,7 +496,7 @@ export function ChatView() {
       )}
 
       {/* Input area */}
-      <div className="shrink-0 border-t border-border bg-surface/80 backdrop-blur-sm px-4 py-3">
+      <div className="shrink-0 border-t border-white/5 bg-surface/60 backdrop-blur-xl px-4 py-3">
         <div className="max-w-3xl mx-auto">
           <div className={clsx(
             'flex items-end gap-2 bg-panel rounded-xl border transition-all',

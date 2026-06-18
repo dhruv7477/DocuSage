@@ -329,6 +329,88 @@ class QdrantVectorStore(BaseVectorStore):
         )
         return results
 
+    # ── Chunk access (summary route + page-image highlight) ──────
+
+    async def list_document_chunks(
+        self,
+        workspace_id: str,
+        document_id: str,
+        user_id: str,
+    ) -> list[SearchResult]:
+        """
+        All chunks of one document, ordered by chunk_index. Scrolls
+        through Qdrant pages (256 points each) until exhausted; the
+        isolation filter (user + workspace + document) is mandatory.
+        """
+        name = self._collection_name(workspace_id)
+        qfilter = self._build_isolation_filter(
+            SearchFilter(
+                user_id=user_id,
+                workspace_id=workspace_id,
+                document_ids=[document_id],
+            )
+        )
+
+        results: list[SearchResult] = []
+        offset = None
+        try:
+            while True:
+                points, offset = await self._client.scroll(
+                    collection_name=name,
+                    scroll_filter=qfilter,
+                    limit=256,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                results.extend(_point_to_result(p, score=1.0) for p in points)
+                if offset is None:
+                    break
+        except UnexpectedResponse as exc:
+            raise VectorStoreError(
+                f"Failed to list chunks for document '{document_id}'",
+                detail=str(exc),
+            ) from exc
+
+        results.sort(key=lambda r: r.payload.chunk_index)
+        log.debug(
+            "document_chunks_listed",
+            document_id=document_id,
+            chunks=len(results),
+        )
+        return results
+
+    async def get_chunk(
+        self,
+        workspace_id: str,
+        chunk_id: str,
+        user_id: str,
+    ) -> SearchResult | None:
+        """Single chunk by point id; None unless owned by `user_id`."""
+        name = self._collection_name(workspace_id)
+        try:
+            points = await self._client.retrieve(
+                collection_name=name,
+                ids=[chunk_id],
+                with_payload=True,
+                with_vectors=False,
+            )
+        except UnexpectedResponse as exc:
+            if exc.status_code == 404:
+                return None
+            raise VectorStoreError(
+                f"Failed to fetch chunk '{chunk_id}'", detail=str(exc)
+            ) from exc
+
+        if not points:
+            return None
+        point = points[0]
+        payload = point.payload or {}
+        if payload.get("user_id") != user_id:
+            # Ownership mismatch — treat as not-found, never leak.
+            return None
+        return _point_to_result(point, score=1.0)
+
     # ── Delete ────────────────────────────────────────────────────
 
     async def delete_document_vectors(

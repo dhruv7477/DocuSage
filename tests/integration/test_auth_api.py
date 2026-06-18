@@ -123,35 +123,54 @@ class TestMeEndpoint:
 
     def test_me_with_valid_token_returns_user(self, client):
         # Generate a real JWT, mock the DB lookup
+        from src.configs.config import get_settings
         from src.core.security import create_access_token
         import uuid
 
+        settings = get_settings()
         user_id = uuid.uuid4()
-        token = create_access_token(subject=str(user_id), token_type="access")
+        token = create_access_token(
+            subject=str(user_id),
+            secret_key=settings.secret_key,
+            algorithm=settings.algorithm,
+            expires_minutes=settings.access_token_expire_minutes,
+        )
 
-        mock_user = MagicMock()
+        from datetime import datetime, timezone
+        from src.models.user import User, UserRole
+        now = datetime.now(timezone.utc)
+        mock_user = User()
         mock_user.id = user_id
         mock_user.email = "alice@example.com"
         mock_user.full_name = "Alice"
-        mock_user.role = MagicMock(value="member")
+        mock_user.role = UserRole.MEMBER
         mock_user.is_active = True
         mock_user.is_email_verified = True
+        mock_user.created_at = now
+        mock_user.updated_at = now
 
-        with patch("src.dependencies.AsyncSessionLocal") as MockSession:
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
-            mock_ctx.__aexit__ = AsyncMock(return_value=False)
-            mock_result = MagicMock()
-            mock_result.scalar_one_or_none.return_value = mock_user
-            mock_ctx.execute = AsyncMock(return_value=mock_result)
-            MockSession.return_value = mock_ctx
+        # get_current_user resolves the user via its `db` dependency —
+        # override get_db so the lookup hits a mock session, not Postgres.
+        from src.db.session import get_db
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_user
+        mock_db.execute = AsyncMock(return_value=mock_result)
 
+        async def _fake_db():
+            yield mock_db
+
+        client.app.dependency_overrides[get_db] = _fake_db
+        try:
             resp = client.get(
                 "/api/v1/auth/me",
                 headers={"Authorization": f"Bearer {token}"},
             )
-        # Accept 200 (user found) or 403 (mock didn't wire up perfectly — ok for this test)
-        assert resp.status_code in (200, 403)
+        finally:
+            client.app.dependency_overrides.pop(get_db, None)
+
+        assert resp.status_code == 200
+        assert resp.json()["email"] == "alice@example.com"
 
 
 class TestHealthEndpoint:

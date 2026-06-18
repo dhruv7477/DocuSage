@@ -22,12 +22,30 @@ Flow tested:
     15. /health endpoint returns 200
 """
 
+import socket
 import uuid
 from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+def _postgres_reachable() -> bool:
+    """The smoke pipeline writes real rows — it needs a live Postgres."""
+    from src.configs.config import get_settings
+    s = get_settings()
+    try:
+        with socket.create_connection((s.postgres_host, s.postgres_port), timeout=2):
+            return True
+    except OSError:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _postgres_reachable(),
+    reason="smoke pipeline needs a live Postgres (run `make dev-up` first)",
+)
 
 # ── Shared mock targets ───────────────────────────────────────────
 
@@ -145,7 +163,10 @@ class TestSmokePipeline:
             )
         assert resp.status_code == 202, resp.text
         data = resp.json()
-        assert data["filename"] == "smoke_test.txt"
+        # `filename` is the storage-safe "{uuid}.txt"; the user-visible
+        # name lives in original_filename.
+        assert data["original_filename"] == "smoke_test.txt"
+        assert data["filename"].endswith(".txt")
         assert data["status"] in ("pending", "PENDING")
         state["document_id"] = data["id"]
 
@@ -178,7 +199,9 @@ class TestSmokePipeline:
             mock_gen.return_value = RAGResponse(
                 answer="The document discusses smoke testing.",
                 sources=[],
-                tokens_used=42,
+                context_chunks_used=1,
+                confidence=0.9,
+                abstained=False,
             )
             resp = client.post(
                 f"/api/v1/chat/{state['chat_id']}/query",
@@ -260,16 +283,15 @@ class TestSmokePipeline:
         """Eval endpoint accepts a Q&A pair and returns metrics."""
         with patch("src.services.eval_service.EvalService.evaluate") as mock_eval:
             from src.services.eval_service import EvalResult
+            # composite_score is a derived @property — not a constructor arg.
             mock_eval.return_value = EvalResult(
                 question="Q",
                 answer="A",
-                contexts=["C"],
                 faithfulness=0.9,
                 answer_relevance=0.85,
                 context_precision=0.8,
                 context_recall=None,
                 answer_similarity=None,
-                composite_score=0.85,
             )
             resp = client.post("/api/v1/eval/run", json={
                 "question": "What is DocuSage?",

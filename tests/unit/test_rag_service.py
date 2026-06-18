@@ -185,6 +185,34 @@ class TestRAGServiceStream:
         assert tokens == ["Hello", " world", "."]
 
 
+class TestPrepareStream:
+
+    @pytest.mark.asyncio
+    async def test_on_stage_callback_sequence(self, rag_service, mock_llm):
+        async def _fake_stream(messages, config):
+            yield "token"
+
+        mock_llm.stream = _fake_stream
+        stages: list[str] = []
+        outcome, token_iter = await rag_service.prepare_stream(
+            "Query", uuid.uuid4(), _make_user(), on_stage=stages.append,
+        )
+        [t async for t in token_iter]
+        assert stages == ["retrieving", "reranking"]
+
+    @pytest.mark.asyncio
+    async def test_outcome_carries_built_prompt(self, rag_service, mock_llm):
+        async def _fake_stream(messages, config):
+            yield "token"
+
+        mock_llm.stream = _fake_stream
+        outcome, _ = await rag_service.prepare_stream(
+            "Query", uuid.uuid4(), _make_user(),
+        )
+        assert outcome.prompt is not None
+        assert outcome.prompt.included_results  # the mocked chunk made it in
+
+
 class TestExtractSources:
 
     def test_deduplicates_by_document_and_page(self):

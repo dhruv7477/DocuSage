@@ -38,6 +38,45 @@ def _make_result(
     )
 
 
+class TestCitationAlignment:
+    """included_results[n-1] must be exactly the chunk numbered [n]."""
+
+    def test_duplicate_text_does_not_consume_a_number(self):
+        builder = PromptBuilder()
+        results = [
+            _make_result("Alpha text.", source="a.pdf"),
+            _make_result("Alpha text.", source="b.pdf"),   # dup text — skipped
+            _make_result("Beta text.", source="c.pdf"),
+        ]
+        prompt = builder.build(query="q", search_results=results)
+        # Only inspect the CONTEXT block — the grounding instructions above
+        # it contain literal [n] examples.
+        context = prompt.messages[0].content.split("CONTEXT:")[1]
+
+        assert len(prompt.included_results) == 2
+        assert prompt.included_results[0].payload.source == "a.pdf"
+        assert prompt.included_results[1].payload.source == "c.pdf"
+        # Numbering is contiguous: [1] and [2], never [3].
+        assert "[1] Source: a.pdf" in context
+        assert "[2] Source: c.pdf" in context
+        assert "[3]" not in context
+
+    def test_budget_drop_keeps_alignment(self):
+        builder = PromptBuilder(max_context_tokens=60)
+        results = [
+            _make_result("short.", source="first.pdf"),
+            _make_result("word " * 500, source="huge.pdf"),  # blows the budget
+        ]
+        prompt = builder.build(query="q", search_results=results)
+        assert len(prompt.included_results) == 1
+        assert prompt.included_results[0].payload.source == "first.pdf"
+        assert prompt.context_chunks_used == 1
+
+    def test_empty_results_empty_included(self):
+        prompt = PromptBuilder().build(query="q", search_results=[])
+        assert prompt.included_results == []
+
+
 class TestPromptBuilder:
 
     def test_build_returns_system_user_messages(self):

@@ -5,7 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DocuSage</title>
     <style>
-      html, body, #root { height: 100%; margin: 0; background: #09090f; color: #e8e8f0; font-family: system-ui, sans-serif; }
+      /* overflow:hidden at the document level: the app is a fixed
+         h-screen shell with internal scroll areas — the page itself
+         must never scroll or show a dead band below the shell. */
+      html, body, #root { height: 100%; margin: 0; overflow: hidden; background: #09090f; color: #e8e8f0; font-family: system-ui, sans-serif; }
     </style>
   </head>
   <body>

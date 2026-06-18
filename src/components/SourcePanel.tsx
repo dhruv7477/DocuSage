@@ -1,37 +1,17 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Viewer, Worker } from '@react-pdf-viewer/core'
-import { searchPlugin } from '@react-pdf-viewer/search'
-import { X, Loader2, AlertTriangle, FileText } from 'lucide-react'
-import { documents as docsApi } from '@/api'
-import { getApiErrorMessage } from '@/api/client'
+import { useEffect, useState } from 'react'
+import { X, Loader2, AlertTriangle, FileText, ChevronLeft, ChevronRight, Info } from 'lucide-react'
 import { useSourcePanel } from '@/store/source-panel'
-
-import '@react-pdf-viewer/core/lib/styles/index.css'
-import '@react-pdf-viewer/search/lib/styles/index.css'
-
-// Use the pdfjs worker that ships with pdfjs-dist@3.11.174 to match
-// @react-pdf-viewer/core@3.12 (newer pdfjs versions break the viewer).
-const PDF_WORKER_URL = 'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js'
+import { usePageImage } from '@/hooks/usePageImage'
 
 function isPdf(filename: string): boolean {
   return /\.pdf$/i.test(filename)
 }
 
-function buildHighlightKeyword(text: string): string {
-  // The PDF search plugin matches on a literal keyword. A long chunk
-  // rarely matches verbatim (line breaks, hyphenation), so we trim to
-  // a distinctive ~80-char prefix from the first non-trivial sentence.
-  const cleaned = text.replace(/\s+/g, ' ').trim()
-  // Skip leading boilerplate like headings if any.
-  return cleaned.slice(0, 80)
-}
-
 /**
  * Thin gate component — subscribes only to `open` so it can short-circuit
- * to `null` cheaply. Only when the panel is actually open do we mount the
- * heavy content component (which kicks off the bytes fetch, PDF worker
- * load, etc.). Splitting the component this way guarantees that React
- * never sees a varying hook count on the SourcePanel instance.
+ * to `null` cheaply. The heavy content component (image fetch, page
+ * state) only mounts while the panel is open, so React never sees a
+ * varying hook count on one component instance.
  */
 export function SourcePanel() {
   const open = useSourcePanel((s) => s.open)
@@ -42,9 +22,12 @@ export function SourcePanel() {
 function SourcePanelContent() {
   const source = useSourcePanel((s) => s.source)
   const close = useSourcePanel((s) => s.close)
-  const [bytes, setBytes] = useState<Uint8Array | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+
+  const citedPage = source?.page && source.page >= 1 ? source.page : 1
+  const [page, setPage] = useState(citedPage)
+
+  // Jump back to the cited page whenever a new source opens.
+  useEffect(() => setPage(citedPage), [citedPage, source?.chunk_id])
 
   // Esc to close
   useEffect(() => {
@@ -53,36 +36,18 @@ function SourcePanelContent() {
     return () => document.removeEventListener('keydown', onKey)
   }, [close])
 
-  // Fetch document bytes whenever the source changes.
-  useEffect(() => {
-    if (!source) return
-    let cancelled = false
-    setBytes(null)
-    setError(null)
-    setLoading(true)
-    docsApi.file(source.document_id)
-      .then((res) => {
-        if (cancelled) return
-        setBytes(new Uint8Array(res.data))
-      })
-      .catch((err) => {
-        if (cancelled) return
-        setError(getApiErrorMessage(err, 'Could not load the document.'))
-      })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [source])
-
-  // Build a fresh search plugin per source so its internal state resets.
-  const searchPluginInstance = useMemo(() => searchPlugin({
-    keyword: source ? buildHighlightKeyword(source.text ?? '') : '',
-  }), [source])
-
-  // Auto-jump to page & trigger highlight once the document is rendered.
-  const initialPage = source?.page != null && source.page > 0 ? source.page - 1 : 0
-
   const filename = source?.source ?? 'Document'
-  const canRenderPdf = source && isPdf(filename) && bytes
+  const pdf = source && isPdf(filename)
+
+  // Only highlight on the cited page — other pages render plain.
+  const { data, isLoading, isError } = usePageImage(
+    pdf ? source.document_id : undefined,
+    page,
+    page === citedPage ? source?.chunk_id : undefined,
+    2,
+  )
+
+  const pageCount = data?.pageCount ?? 0
 
   return (
     <>
@@ -96,7 +61,7 @@ function SourcePanelContent() {
       <aside
         role="dialog"
         aria-label={`Source viewer: ${filename}`}
-        className="fixed top-0 right-0 z-50 h-full w-full sm:w-[min(720px,90vw)] bg-panel border-l border-border shadow-2xl flex flex-col animate-slide-in-right"
+        className="fixed top-0 right-0 z-50 h-full w-full sm:w-[min(720px,90vw)] bg-panel/80 backdrop-blur-2xl border-l border-border shadow-2xl flex flex-col animate-slide-in-right"
       >
         {/* Header */}
         <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
@@ -107,7 +72,7 @@ function SourcePanelContent() {
             </p>
             {source?.page != null && (
               <p className="font-mono text-2xs text-dim">
-                Page {source.page}
+                Cited on page {source.page}
                 {source.heading_path && source.heading_path.length > 0 && (
                   <span> · {source.heading_path.join(' › ')}</span>
                 )}
@@ -124,24 +89,8 @@ function SourcePanelContent() {
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-hidden bg-base/[0.02]">
-          {loading && (
-            <div className="h-full flex items-center justify-center text-dim">
-              <Loader2 className="w-5 h-5 animate-spin mr-2" />
-              Loading document…
-            </div>
-          )}
-
-          {error && (
-            <div className="h-full flex items-center justify-center p-6">
-              <div className="flex items-start gap-3 max-w-md p-4 bg-red/8 border border-red/30 rounded-lg text-sm text-base">
-                <AlertTriangle className="w-4 h-4 text-red shrink-0 mt-0.5" />
-                <span>{error}</span>
-              </div>
-            </div>
-          )}
-
-          {!loading && !error && source && !isPdf(filename) && (
+        <div className="flex-1 overflow-y-auto bg-base/[0.02]">
+          {!pdf && source && (
             <div className="h-full overflow-y-auto p-6 text-sm leading-relaxed whitespace-pre-wrap text-base/90">
               <p className="font-mono text-2xs text-dim uppercase tracking-wider mb-3">
                 Plain-text preview (non-PDF source)
@@ -152,16 +101,71 @@ function SourcePanelContent() {
             </div>
           )}
 
-          {!loading && !error && canRenderPdf && (
-            <Worker workerUrl={PDF_WORKER_URL}>
-              <Viewer
-                fileUrl={bytes}
-                plugins={[searchPluginInstance]}
-                initialPage={initialPage}
+          {pdf && isLoading && (
+            <div className="h-full flex items-center justify-center text-dim">
+              <Loader2 className="w-5 h-5 animate-spin mr-2" />
+              Rendering page…
+            </div>
+          )}
+
+          {pdf && isError && (
+            <div className="h-full flex items-center justify-center p-6">
+              <div className="flex items-start gap-3 max-w-md p-4 bg-red/8 border border-red/30 rounded-lg text-sm text-base">
+                <AlertTriangle className="w-4 h-4 text-red shrink-0 mt-0.5" />
+                <span>Could not render this page. Try downloading the document instead.</span>
+              </div>
+            </div>
+          )}
+
+          {pdf && data && (
+            <div className="p-4">
+              {page === citedPage && !data.highlightFound && (
+                <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-amber/8 border border-amber/25 rounded-lg text-xs text-subtle">
+                  <Info className="w-3.5 h-3.5 text-amber shrink-0" />
+                  Exact passage couldn't be marked on this page — showing the full cited page.
+                </div>
+              )}
+              <img
+                src={data.url}
+                alt={`${filename} — page ${page}`}
+                className="w-full rounded-lg border border-border shadow-panel"
               />
-            </Worker>
+            </div>
           )}
         </div>
+
+        {/* Footer: page navigation */}
+        {pdf && pageCount > 0 && (
+          <div className="flex items-center justify-center gap-3 px-4 py-3 border-t border-border shrink-0">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              aria-label="Previous page"
+              className="p-1.5 rounded hover:bg-base/5 text-subtle hover:text-base disabled:opacity-30 disabled:pointer-events-none transition-colors"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <span className="font-mono text-xs text-subtle">
+              Page {page} / {pageCount}
+              {page !== citedPage && (
+                <button
+                  onClick={() => setPage(citedPage)}
+                  className="ml-2 text-teal/80 hover:text-teal transition-colors"
+                >
+                  back to citation
+                </button>
+              )}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+              disabled={page >= pageCount}
+              aria-label="Next page"
+              className="p-1.5 rounded hover:bg-base/5 text-subtle hover:text-base disabled:opacity-30 disabled:pointer-events-none transition-colors"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        )}
       </aside>
     </>
   )

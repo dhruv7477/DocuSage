@@ -27,7 +27,12 @@ export const useApp = create<AppState>()(
     }),
     {
       name: 'docusage-app',
-      partialize: (s) => ({ activeWorkspaceId: s.activeWorkspaceId }),
+      // Persist the active chat too so a reload restores the session
+      // exactly where the user left it.
+      partialize: (s) => ({
+        activeWorkspaceId: s.activeWorkspaceId,
+        activeChatId: s.activeChatId,
+      }),
     }
   )
 )

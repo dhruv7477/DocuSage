@@ -4,6 +4,7 @@ import { useApp } from '@/store/app'
 import { Sidebar } from '@/components/Sidebar'
 import { ChatView } from '@/components/ChatView'
 import { DocumentsPanel } from '@/components/DocumentsPanel'
+import { CommandPalette } from '@/components/CommandPalette'
 import { documents as docsApi } from '@/api'
 
 export function AppShell() {
@@ -17,10 +18,21 @@ export function AppShell() {
   const docCount = data?.total ?? 0
 
   return (
-    <div className="flex h-screen w-screen bg-void overflow-hidden">
+    // `relative` is load-bearing: the aurora/grid layers are absolutely
+    // positioned with negative offsets. Without a positioned ancestor they
+    // anchor to the document and grow the page past the viewport
+    // (horizontal + vertical scrollbars). With it, overflow-hidden clips.
+    <div className="relative flex h-screen w-screen bg-void overflow-hidden">
       {/* Grid background */}
       <div className="absolute inset-0 bg-grid bg-grid pointer-events-none opacity-100" />
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_20%_50%,rgba(0,212,200,0.03),transparent)] pointer-events-none" />
+
+      {/* Aurora layers — slow-drifting teal/amber glows behind everything */}
+      <div className="absolute -top-1/4 -left-1/4 w-[70vw] h-[70vh] rounded-full bg-[radial-gradient(circle,rgba(0,212,200,0.06),transparent_60%)] blur-3xl pointer-events-none motion-safe:animate-aurora" />
+      <div className="absolute -bottom-1/4 -right-1/4 w-[60vw] h-[60vh] rounded-full bg-[radial-gradient(circle,rgba(245,158,11,0.04),transparent_60%)] blur-3xl pointer-events-none motion-safe:animate-aurora-slow" />
+
+      {/* Ctrl/Cmd+K command palette */}
+      <CommandPalette />
 
       {/* Sidebar toggle (always visible) */}
       {!sidebarOpen && (
@@ -52,9 +64,9 @@ export function AppShell() {
           <ChatView />
         </div>
 
-        {/* Documents panel (slide-in) */}
+        {/* Documents panel (slide-in, glass) */}
         {docPanelOpen && (
-          <div className="w-80 shrink-0 border-l border-border bg-surface/80 backdrop-blur-sm">
+          <div className="w-80 shrink-0 border-l border-white/5 bg-surface/60 backdrop-blur-xl">
             <DocumentsPanel onClose={toggleDocPanel} />
           </div>
         )}

@@ -2,6 +2,36 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { ExternalLink } from 'lucide-react'
 import type { CitedSource } from '@/api'
 import { useSourcePanel } from '@/store/source-panel'
+import { usePageImage } from '@/hooks/usePageImage'
+
+function isPdf(filename: string): boolean {
+  return /\.pdf$/i.test(filename)
+}
+
+/** Small server-rendered page screenshot with the chunk highlighted. */
+function LensThumbnail({ source }: { source: CitedSource }) {
+  const { data, isLoading, isError } = usePageImage(
+    source.document_id,
+    source.page && source.page >= 1 ? source.page : 1,
+    source.chunk_id,
+    1, // thumbnail scale — small + fast
+  )
+
+  if (isError) return null
+  if (isLoading) {
+    return (
+      <div className="w-full h-32 mb-2 rounded bg-base/5 border border-border/60 animate-pulse" />
+    )
+  }
+  if (!data) return null
+  return (
+    <img
+      src={data.url}
+      alt={`${source.source} — page ${source.page ?? 1}`}
+      className="w-full max-h-44 object-cover object-top mb-2 rounded border border-border/60"
+    />
+  )
+}
 
 interface CitationLensProps {
   source: CitedSource
@@ -19,7 +49,7 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function highlightQueryTerms(text: string, query: string): React.ReactNode[] {
+export function highlightQueryTerms(text: string, query: string): React.ReactNode[] {
   if (!query.trim()) return [text]
 
   const terms = Array.from(
@@ -139,8 +169,15 @@ export function CitationLens({ source, query, children }: CitationLensProps) {
             </p>
           )}
 
+          {/* Page screenshot with the passage marked (PDF only) */}
+          {isPdf(source.source) && <LensThumbnail source={source} />}
+
           {/* Chunk text with query highlights */}
-          <div className="text-xs leading-relaxed text-base/90 max-h-48 overflow-y-auto whitespace-pre-wrap break-words pr-1">
+          <div className={
+            isPdf(source.source)
+              ? "text-xs leading-relaxed text-base/90 max-h-20 overflow-y-auto whitespace-pre-wrap break-words pr-1"
+              : "text-xs leading-relaxed text-base/90 max-h-48 overflow-y-auto whitespace-pre-wrap break-words pr-1"
+          }>
             {source.text
               ? highlightQueryTerms(source.text, query ?? '')
               : <span className="text-dim italic">No preview available for this chunk.</span>

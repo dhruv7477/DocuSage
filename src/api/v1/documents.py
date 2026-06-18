@@ -8,17 +8,18 @@ The API responds immediately with status=PENDING.
 The client polls GET /documents/{id} to track progress.
 """
 
+import asyncio
 import mimetypes
 import uuid
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.logger import get_logger
 from src.db.session import get_db
 from src.dependencies import get_current_user
-from src.models.document import DocumentStatus
+from src.models.document import DocumentStatus, DocumentType
 from src.models.user import User
 from src.schemas.document import DocumentListResponse, DocumentResponse
 from src.services.document_service import DocumentService
@@ -147,6 +148,74 @@ async def get_document_file(
         headers={
             "Content-Disposition": f"inline; filename*=UTF-8''{quoted}",
             "Cache-Control": "private, max-age=300",
+        },
+    )
+
+
+@router.get(
+    "/{document_id}/page-image",
+    summary="Render one PDF page to PNG with the cited passage highlighted",
+    response_class=Response,
+)
+async def get_document_page_image(
+    document_id: uuid.UUID,
+    page: int = Query(..., ge=1, description="1-based page number"),
+    chunk_id: str | None = Query(default=None, description="Chunk whose text to highlight"),
+    scale: float = Query(default=2.0, ge=0.5, le=3.0),
+    current_user: User = Depends(get_current_user),
+    service: DocumentService = Depends(_get_service),
+) -> Response:
+    """
+    The "screenshot of the source" behind citation chips: the original
+    PDF page rendered server-side (PyMuPDF) with amber highlight marks
+    over the chunk text that grounded the answer.
+
+    Headers: X-Page-Count, X-Highlight-Found ("1"/"0").
+    422 for non-PDF documents or out-of-range pages; 404 for unowned
+    documents/chunks.
+    """
+    document = await service.get_document(document_id, current_user)
+    if document.file_type != DocumentType.PDF:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Page images are only available for PDF documents.",
+        )
+
+    highlight_text: str | None = None
+    if chunk_id:
+        from src.vector_store.factory import get_vector_store
+
+        chunk = await get_vector_store().get_chunk(
+            str(document.workspace_id), chunk_id, str(current_user.id)
+        )
+        if chunk is None or chunk.payload.document_id != str(document_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chunk not found for this document.",
+            )
+        highlight_text = chunk.payload.text
+
+    pdf_bytes = await service._storage.download(document.storage_path)
+
+    from src.services.page_renderer import render_pdf_page
+
+    loop = asyncio.get_event_loop()
+    try:
+        rendered = await loop.run_in_executor(
+            None, render_pdf_page, pdf_bytes, page, highlight_text, scale
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+
+    return Response(
+        content=rendered.png,
+        media_type="image/png",
+        headers={
+            "X-Page-Count": str(rendered.page_count),
+            "X-Highlight-Found": "1" if rendered.highlight_found else "0",
+            "Cache-Control": "private, max-age=3600",
         },
     )
 

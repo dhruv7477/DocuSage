@@ -6,6 +6,7 @@ Integration tests for /api/v1/documents/* endpoints.
 
 import io
 import uuid
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -27,9 +28,35 @@ def _make_mock_user(uid: uuid.UUID):
 
 
 def _make_auth_headers(user_id: uuid.UUID) -> dict:
+    from src.configs.config import get_settings
     from src.core.security import create_access_token
-    token = create_access_token(subject=str(user_id), token_type="access")
+
+    settings = get_settings()
+    token = create_access_token(
+        subject=str(user_id),
+        secret_key=settings.secret_key,
+        algorithm=settings.algorithm,
+        expires_minutes=settings.access_token_expire_minutes,
+    )
     return {"Authorization": f"Bearer {token}"}
+
+
+@contextmanager
+def _auth_as(test_app, mock_user):
+    """
+    Override the get_current_user dependency for the duration of a test.
+
+    NOTE: `unittest.mock.patch("src.dependencies.get_current_user")` does
+    NOT work here — FastAPI captured the original function object in
+    `Depends(...)` at import time, so swapping the module attribute has
+    no effect. `dependency_overrides` is the supported mechanism.
+    """
+    from src.dependencies import get_current_user
+    test_app.dependency_overrides[get_current_user] = lambda: mock_user
+    try:
+        yield
+    finally:
+        test_app.dependency_overrides.pop(get_current_user, None)
 
 
 @pytest.fixture
@@ -62,7 +89,7 @@ class TestDocumentUpload:
     def test_upload_missing_file_returns_422(self, test_app, user_id, workspace_id, headers):
         mock_user = _make_mock_user(user_id)
         with TestClient(test_app, raise_server_exceptions=False) as c:
-            with patch("src.dependencies.get_current_user", return_value=mock_user):
+            with _auth_as(test_app, mock_user):
                 resp = c.post(
                     "/api/v1/documents/upload",
                     data={"workspace_id": str(workspace_id)},
@@ -83,7 +110,7 @@ class TestDocumentUpload:
                     ".exe files are not supported."
                 )
                 MockSvc.return_value = mock_svc
-                with patch("src.dependencies.get_current_user", return_value=mock_user):
+                with _auth_as(test_app, mock_user):
                     resp = c.post(
                         "/api/v1/documents/upload",
                         data={"workspace_id": str(workspace_id)},
@@ -99,20 +126,27 @@ class TestDocumentUpload:
         from datetime import datetime, timezone
         mock_user = _make_mock_user(user_id)
 
-        mock_doc = MagicMock()
-        mock_doc.id = uuid.uuid4()
-        mock_doc.workspace_id = workspace_id
-        mock_doc.user_id = user_id
-        mock_doc.filename = "abc123.txt"
-        mock_doc.original_filename = "notes.txt"
-        mock_doc.file_type = MagicMock(value="txt")
-        mock_doc.file_size_bytes = 100
-        mock_doc.status = MagicMock(value="pending")
-        mock_doc.chunk_count = 0
-        mock_doc.error_message = None
+        # SimpleNamespace, not MagicMock: pydantic's from_attributes reads
+        # every schema field, and MagicMock auto-creates garbage attributes
+        # (e.g. `progress`) that fail validation with a 500.
+        from types import SimpleNamespace
+        from src.models.document import DocumentStatus, DocumentType
         now = datetime.now(timezone.utc)
-        mock_doc.created_at = now
-        mock_doc.updated_at = now
+        mock_doc = SimpleNamespace(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            user_id=user_id,
+            filename="abc123.txt",
+            original_filename="notes.txt",
+            file_type=DocumentType.TXT,
+            file_size_bytes=100,
+            status=DocumentStatus.PENDING,
+            progress=0,
+            chunk_count=0,
+            error_message=None,
+            created_at=now,
+            updated_at=now,
+        )
 
         with TestClient(test_app, raise_server_exceptions=False) as c:
             with patch("src.api.v1.documents.DocumentService") as MockSvc:
@@ -120,8 +154,11 @@ class TestDocumentUpload:
                 mock_svc.upload_document.return_value = mock_doc
                 MockSvc.return_value = mock_svc
 
-                with patch("src.api.v1.documents.ingest_document_task", create=True):
-                    with patch("src.dependencies.get_current_user", return_value=mock_user):
+                # The endpoint imports the task inside the function body, so
+                # patch it at its real location (module attribute lookup at
+                # call time makes this effective).
+                with patch("src.workers.tasks.ingest_document_task"):
+                    with _auth_as(test_app, mock_user):
                         resp = c.post(
                             "/api/v1/documents/upload",
                             data={"workspace_id": str(workspace_id)},
@@ -150,7 +187,7 @@ class TestListDocuments:
                 mock_svc = AsyncMock()
                 mock_svc.list_documents.return_value = []
                 MockSvc.return_value = mock_svc
-                with patch("src.dependencies.get_current_user", return_value=mock_user):
+                with _auth_as(test_app, mock_user):
                     resp = c.get(
                         f"/api/v1/documents?workspace_id={workspace_id}",
                         headers=headers,
@@ -173,7 +210,7 @@ class TestGetDocument:
                 mock_svc = AsyncMock()
                 mock_svc.get_document.side_effect = DocumentNotFoundError("Not found.")
                 MockSvc.return_value = mock_svc
-                with patch("src.dependencies.get_current_user", return_value=mock_user):
+                with _auth_as(test_app, mock_user):
                     resp = c.get(
                         f"/api/v1/documents/{doc_id}",
                         headers=headers,
@@ -193,7 +230,7 @@ class TestGetDocument:
                     "Access denied."
                 )
                 MockSvc.return_value = mock_svc
-                with patch("src.dependencies.get_current_user", return_value=mock_user):
+                with _auth_as(test_app, mock_user):
                     resp = c.get(
                         f"/api/v1/documents/{doc_id}",
                         headers=headers,

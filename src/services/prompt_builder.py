@@ -30,7 +30,7 @@ What changed in Phase 4
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.providers.llm.base import LLMMessage
 from src.vector_store.base import SearchResult
@@ -61,6 +61,11 @@ Grounding rules
   - Do not invent facts, figures, dates, or quotes that are not present in CONTEXT.
   - If CONTEXT does not contain enough information to answer, reply EXACTLY: "{NO_ANSWER_PHRASE}" and stop.
   - Be concise. Prefer direct answers over restating the question.
+
+Style
+  - Write like a sharp, helpful colleague: professional, informative, human-friendly.
+  - Lead with the answer. Use short paragraphs; use bullet points for enumerations.
+  - No filler openers ("Based on the provided context...", "According to the documents...") — go straight to the substance.
 """
 
 
@@ -82,6 +87,10 @@ class BuiltPrompt:
     history_messages_used: int
     estimated_tokens: int
     abstained: bool = False
+    # The results actually included in CONTEXT, in numbering order:
+    # included_results[n-1] is the ground truth for citation [n].
+    # Anything deduplicated or dropped for budget is NOT in this list.
+    included_results: list[SearchResult] = field(default_factory=list)
 
 
 class PromptBuilder:
@@ -123,7 +132,7 @@ class PromptBuilder:
             history:         Prior chat messages (oldest first).
             abstain:         If True, build the no-answer prompt instead.
         """
-        context_text, chunks_used = self._build_context(search_results)
+        context_text, included = self._build_context(search_results)
         history_messages, history_used = self._trim_history(history or [])
 
         system_text = SYSTEM_PROMPT_ABSTAIN if abstain else SYSTEM_PROMPT_GROUNDED
@@ -141,17 +150,18 @@ class PromptBuilder:
 
         return BuiltPrompt(
             messages=messages,
-            context_chunks_used=chunks_used,
+            context_chunks_used=len(included),
             history_messages_used=history_used,
             estimated_tokens=estimated_tokens,
             abstained=abstain,
+            included_results=included,
         )
 
     # ── Private ───────────────────────────────────────────────────
 
     def _build_context(
         self, results: list[SearchResult]
-    ) -> tuple[str, int]:
+    ) -> tuple[str, list[SearchResult]]:
         """
         Numbered context block, ordered by reranker score (best first).
 
@@ -160,19 +170,20 @@ class PromptBuilder:
             [1] Source: foo.pdf — p.3 — Section 2 > 2.1 Acceptable Documents
             <chunk text>
 
-        The "Section 2 > 2.1 Acceptable Documents" segment comes from
-        the chunk's `heading_path`, populated during ingestion. It
-        gives the model structural context essentially for free, and
-        makes citations far more useful in the UI.
+        Numbering is contiguous over *included* chunks only — duplicates
+        and budget-dropped chunks never consume a number. This keeps
+        `[n]` ↔ `included_results[n-1]` a perfect bijection, which the
+        answer validator and the sources SSE event rely on.
         """
         if not results:
-            return "(no documents matched the query)", 0
+            return "(no documents matched the query)", []
 
         seen_texts: set[str] = set()
         parts: list[str] = []
+        included: list[SearchResult] = []
         token_budget = self._max_context_tokens
 
-        for i, result in enumerate(results):
+        for result in results:
             text = result.payload.text.strip()
             if not text or text in seen_texts:
                 continue
@@ -185,18 +196,19 @@ class PromptBuilder:
                 heading,
             ]
             header = " — ".join(b for b in header_bits if b)
-            chunk_text = f"[{i + 1}] {header}\n{text}"
+            chunk_text = f"[{len(included) + 1}] {header}\n{text}"
 
             chunk_tokens = _count_tokens(chunk_text)
             if chunk_tokens > token_budget:
                 break
 
             parts.append(chunk_text)
+            included.append(result)
             token_budget -= chunk_tokens
 
         if not parts:
-            return "(no documents matched the query)", 0
-        return "\n\n".join(parts), len(parts)
+            return "(no documents matched the query)", []
+        return "\n\n".join(parts), included
 
     def _trim_history(
         self, history: list[LLMMessage]
@@ -228,8 +240,13 @@ try:
     import tiktoken as _tiktoken
     _enc = _tiktoken.get_encoding("cl100k_base")
 
-    def _count_tokens(text: str) -> int:
+    def count_tokens(text: str) -> int:
+        """Public tokenizer-based count (cl100k_base). Shared with DocSummaryService."""
         return max(1, len(_enc.encode(text)))
 except Exception:  # pragma: no cover — tiktoken is in requirements.txt
-    def _count_tokens(text: str) -> int:  # type: ignore[misc]
+    def count_tokens(text: str) -> int:  # type: ignore[misc]
         return max(1, len(text) // 4)
+
+# Backward-compat alias — existing tests and internal callers use the
+# underscore name.
+_count_tokens = count_tokens

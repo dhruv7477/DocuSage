@@ -267,7 +267,10 @@ class TestRAGFullPipeline:
         assert source.document_id == doc_id
         assert source.source_filename == "company_policy.pdf"
         assert source.page_number == 4
-        assert source.relevance_score == 0.93
+        # Hybrid retrieval replaces raw cosine scores with RRF fused
+        # scores (rank-based) by design — assert a sane score, not the
+        # original cosine value.
+        assert 0.0 < source.relevance_score <= 1.0
 
     @pytest.mark.asyncio
     async def test_streaming_yields_all_tokens(self):

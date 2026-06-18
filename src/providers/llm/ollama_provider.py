@@ -67,6 +67,14 @@ class OllamaProvider(BaseLLMProvider):
                 f"Ollama request failed: {exc.response.status_code}",
                 detail=exc.response.text,
             ) from exc
+        except httpx.TimeoutException as exc:
+            # Reachable but slow — usually the model is still loading into RAM
+            # (or the container was OOM-killed and is reloading).
+            raise LLMProviderError(
+                "The model timed out — it may still be loading. "
+                "Give it a moment and try again.",
+                detail=str(exc),
+            ) from exc
         except httpx.RequestError as exc:
             raise LLMProviderError(
                 "Cannot reach Ollama. Is it running?",
@@ -124,6 +132,12 @@ class OllamaProvider(BaseLLMProvider):
             raise LLMProviderError(
                 f"Ollama stream failed: {exc.response.status_code}"
             ) from exc
+        except httpx.TimeoutException as exc:
+            raise LLMProviderError(
+                "The model timed out mid-response — it may still be loading. "
+                "Give it a moment and try again.",
+                detail=str(exc),
+            ) from exc
         except httpx.RequestError as exc:
             raise LLMProviderError(
                 "Cannot reach Ollama during stream.", detail=str(exc)
@@ -179,6 +193,7 @@ class OllamaProvider(BaseLLMProvider):
             "messages": [{"role": m.role, "content": m.content} for m in messages],
             "stream": stream,
             "keep_alive": "30m",
+            **({"format": "json"} if config.response_format == "json" else {}),
             "options": {
                 "temperature": config.temperature,
                 "num_predict": config.max_tokens,

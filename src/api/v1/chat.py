@@ -39,6 +39,7 @@ from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.exceptions import LLMProviderError
 from src.core.logger import get_logger
 from src.db.session import get_db
 from src.dependencies import get_current_user
@@ -54,8 +55,13 @@ from src.schemas.chat import (
     QueryResponse,
     UpdateChatTitleRequest,
 )
+from src.services.answer_validator import validate_answer
+from src.services.chat_orchestrator import ChatOrchestrator, StreamPlan
 from src.services.chat_service import ChatService
-from src.services.rag_service import RAGService, _extract_sources
+from src.services.doc_summary_service import DocSummaryService
+from src.services.prompt_builder import PromptBuilder
+from src.services.question_analyzer import QuestionAnalyzer
+from src.services.rag_service import RAGService
 from src.vector_store.factory import get_vector_store
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
@@ -92,6 +98,10 @@ def _get_rag_service() -> RAGService:
         embedder=embedder,
         vector_store=vector_store,
         llm=llm,
+        prompt_builder=PromptBuilder(
+            max_context_tokens=_settings.rag_context_tokens,
+            max_history_tokens=_settings.rag_history_tokens,
+        ),
         retriever=HybridRetriever(
             embedder=embedder,
             vector_store=vector_store,
@@ -107,6 +117,32 @@ def _get_rag_service() -> RAGService:
         ),
         top_k=_settings.rag_top_k,
         abstention_threshold=_settings.abstention_threshold,
+    )
+
+
+def _get_orchestrator(
+    rag_service: RAGService = Depends(_get_rag_service),
+) -> ChatOrchestrator:
+    """
+    Compose the agentic pipeline: QuestionAnalyzer (router) +
+    RAGService + DocSummaryService. Patched wholesale in tests.
+    """
+    from src.configs.config import get_settings
+    from src.providers.llm.factory import get_router_llm_provider
+
+    _settings = get_settings()
+    llm = get_llm_provider()
+    return ChatOrchestrator(
+        analyzer=QuestionAnalyzer(
+            # Small dedicated classifier model, not the 7B answer model.
+            get_router_llm_provider(),
+            max_tokens=_settings.router_max_tokens,
+            use_llm=_settings.router_use_llm,
+            llm_timeout_seconds=_settings.router_timeout_seconds,
+        ),
+        rag_service=rag_service,
+        summary_service=DocSummaryService(get_vector_store(), llm),
+        enable_router=_settings.enable_question_router,
     )
 
 
@@ -239,7 +275,9 @@ async def query(
     # Persist user message
     await chat_service.save_user_message(chat_id, payload.query)
 
-    # Run RAG pipeline
+    # Run RAG pipeline. Note: the question router only runs on the SSE
+    # path (the product path) — this endpoint is for programmatic
+    # access where callers want deterministic RAG behavior.
     rag_response = await rag_service.generate(
         query=payload.query,
         workspace_id=chat.workspace_id,
@@ -247,6 +285,23 @@ async def query(
         history_messages=history,
         document_ids=payload.document_ids,
     )
+
+    # Programmatic validation: strip hallucinated [n] markers, enforce
+    # the abstention contract. Sources here come from the dedup'd view,
+    # so validate against the prompt's included_results count when we
+    # have it (that's what the [n] numbering refers to).
+    num_sources = (
+        len(rag_response.prompt.included_results)
+        if rag_response.prompt is not None
+        else len(rag_response.sources)
+    )
+    validation = validate_answer(
+        rag_response.answer,
+        num_sources=num_sources,
+        abstained=rag_response.abstained,
+        allow_citations=True,
+    )
+    rag_response.answer = validation.answer
 
     # Persist assistant message with sources
     assistant_msg = await chat_service.save_assistant_message(
@@ -295,15 +350,19 @@ async def stream_query(
     document_ids: str | None = Query(default=None, description="Comma-separated document IDs to scope search"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    rag_service: RAGService = Depends(_get_rag_service),
+    orchestrator: ChatOrchestrator = Depends(_get_orchestrator),
 ) -> StreamingResponse:
     """
     SSE streaming endpoint for real-time chat UI.
 
-    Protocol:
-        data: {"type":"token","content":"<text>"}  (repeated)
-        data: {"type":"sources","sources":[...]}   (once, after stream)
-        data: {"type":"done","message_id":"<id>"}  (final event)
+    Protocol (full event contract):
+        data: {"type":"thinking","stage":"analyzing|routing|retrieving|reranking|generating|summarizing|validating"}
+        data: {"type":"route","intent":"rag_query|doc_summary|off_topic"}
+        data: {"type":"token","content":"<text>"}        (repeated)
+        data: {"type":"answer_final","content":"<text>"} (only if the validator corrected the answer)
+        data: {"type":"warning","code":"...","message":"...","confidence":...}
+        data: {"type":"sources","sources":[...]}         (context-ordered: sources[n-1] backs citation [n])
+        data: {"type":"done","message_id":"<id>"}        (final event)
 
     Connect using fetchEventSource with Authorization header:
         fetchEventSource(`/api/v1/chat/${chatId}/stream?query=...`, {
@@ -319,7 +378,7 @@ async def stream_query(
             document_ids=doc_id_list,
             current_user=current_user,
             db=db,
-            rag_service=rag_service,
+            orchestrator=orchestrator,
         ),
         media_type="text/event-stream",
         headers={
@@ -336,21 +395,24 @@ async def _sse_generator(
     document_ids: list[str] | None,
     current_user: User,
     db: AsyncSession,
-    rag_service: RAGService,
+    orchestrator: ChatOrchestrator,
 ) -> AsyncIterator[str]:
     """
-    Core SSE event generator.
+    Core SSE event generator for the agentic pipeline.
 
     Phases:
-        1. Setup (verify chat, load history, save user message)
-        2. Stream tokens — a background task runs the RAG pipeline while the
-           generator emits keepalive `thinking` events every 8 s so the
-           connection never goes idle-silent through the retrieval/reranking
-           phase (which can take 10-60 s on CPU).
-        3. Persist assistant message
-        4. Emit `warning` event for low-confidence / no-documents
-        5. Emit `sources` event with full citation metadata
-        6. Emit `done` event
+        1. Setup (verify chat, load history, save user message, list
+           the workspace's completed documents for the router)
+        2. Orchestrate + stream — a background task runs
+           `orchestrator.prepare()` (analyze → route → worker) and then
+           drains the route's token iterator. Stage events flow through
+           the same queue; the consumer emits a keepalive heartbeat with
+           the *current* stage every 8 s of silence.
+        3. Validate the finished answer (programmatic: citation mapping,
+           abstention contract) and persist the corrected text
+        4. `warning` events (abstention / validator findings)
+        5. `sources` event — context-ordered: sources[n-1] backs [n]
+        6. `done` event
 
     On any error: emit error event and close stream cleanly.
     """
@@ -362,29 +424,63 @@ async def _sse_generator(
         # ── Phase 1: Setup ────────────────────────────────────────
         chat = await chat_service.get_chat(chat_id, current_user)
         history = await chat_service.load_history(chat_id)
-        await chat_service.save_user_message(chat_id, query)
 
-        # ── Phase 2: Stream tokens w/ keepalive ──────────────────
-        # prepare_stream() does retrieval+reranking first (can take 10-60s
-        # on CPU), then returns (outcome, token_iterator). We run it in a
-        # background task so the consumer can send `thinking` heartbeats
-        # every 8 s to keep the SSE connection alive through the wait.
+        # Idempotency guard: a reconnect/retry of this GET re-sends the
+        # same query — don't persist the user message twice in a row.
+        last = history[-1] if history else None
+        is_duplicate_resend = (
+            last is not None
+            and str(getattr(last, "role", "")) in ("user", "MessageRole.USER")
+            and getattr(last, "content", None) == query
+        )
+        if not is_duplicate_resend:
+            await chat_service.save_user_message(chat_id, query)
+            # Commit the user turn before generation begins. Otherwise it
+            # shares a transaction with the assistant message (committed only
+            # at the end), so any LLM failure rolls the user message back and
+            # it vanishes from the thread on the next refetch.
+            await db.commit()
+        else:
+            log.info("duplicate_user_message_skipped", chat_id=str(chat_id))
+
+        # Completed documents in this workspace — shown to the router so
+        # it can resolve "summarize the I-9 form" to a document id.
+        from src.models.document import DocumentStatus
+        from src.services.document_service import DocumentService
+        from src.services.storage_service import StorageService
+
+        docs = await DocumentService(db, StorageService()).list_documents(
+            chat.workspace_id, current_user
+        )
+        workspace_documents = [
+            (str(d.id), d.original_filename)
+            for d in docs
+            if d.status == DocumentStatus.COMPLETED
+        ]
+
+        # ── Phase 2: Orchestrate + stream w/ keepalive ────────────
         _KEEPALIVE_INTERVAL = 8.0  # seconds between heartbeats
-        token_queue: asyncio.Queue[str | BaseException | None] = asyncio.Queue()
-        outcome_box: list = []  # holds _RetrievalOutcome after prepare_stream resolves
+        token_queue: asyncio.Queue[dict | BaseException | None] = asyncio.Queue()
+        plan_box: list[StreamPlan] = []
+
+        def _emit(event: dict) -> None:
+            # Called from the producer task on this same event loop.
+            token_queue.put_nowait({"kind": "event", "event": event})
 
         async def _produce() -> None:
             try:
-                outcome, token_iter = await rag_service.prepare_stream(
+                plan = await orchestrator.prepare(
                     query=query,
                     workspace_id=chat.workspace_id,
                     user=current_user,
                     history_messages=history,
                     document_ids=document_ids,
+                    workspace_documents=workspace_documents,
+                    emit=_emit,
                 )
-                outcome_box.append(outcome)
-                async for tok in token_iter:
-                    await token_queue.put(tok)
+                plan_box.append(plan)
+                async for tok in plan.token_iter:
+                    await token_queue.put({"kind": "token", "text": tok})
                 await token_queue.put(None)  # sentinel: stream finished cleanly
             except BaseException as exc:
                 await token_queue.put(exc)   # forward any error to the consumer
@@ -392,8 +488,7 @@ async def _sse_generator(
         producer_task = asyncio.create_task(_produce())
 
         full_answer_parts: list[str] = []
-        stage = "retrieving"
-        # Tell the frontend immediately that retrieval has started
+        stage = "analyzing"
         yield _sse_event({"type": "thinking", "stage": stage})
 
         while True:
@@ -402,7 +497,7 @@ async def _sse_generator(
                     token_queue.get(), timeout=_KEEPALIVE_INTERVAL
                 )
             except asyncio.TimeoutError:
-                # Nothing arrived in 8 s — send a heartbeat and keep waiting
+                # Nothing arrived in 8 s — heartbeat the current stage.
                 yield _sse_event({"type": "thinking", "stage": stage})
                 continue
 
@@ -411,26 +506,41 @@ async def _sse_generator(
             if isinstance(item, BaseException):
                 raise item  # Re-raise so the outer except handles it
 
-            if not full_answer_parts:
-                # First token — retrieval/reranking is done
+            if item["kind"] == "event":
+                event = item["event"]
+                if event.get("type") == "thinking":
+                    stage = event.get("stage", stage)
+                yield _sse_event(event)
+                continue
+
+            # Token item
+            if not full_answer_parts and stage != "generating":
                 stage = "generating"
                 yield _sse_event({"type": "thinking", "stage": stage})
+            full_answer_parts.append(item["text"])
+            yield _sse_event({"type": "token", "content": item["text"]})
 
-            full_answer_parts.append(item)
-            yield _sse_event({"type": "token", "content": item})
+        plan = plan_box[0] if plan_box else None
+        cited = plan.sources if plan else []
+        confidence = plan.confidence if plan else 0.0
+        abstained = plan.abstained if plan else True
+        intent = plan.intent if plan else "rag_query"
 
-        # Retrieval outcome is written by _produce() into outcome_box
-        # before the first token is enqueued — always available here.
-        outcome = outcome_box[0] if outcome_box else None
-        cited = _extract_sources(outcome.results) if outcome else []
-        confidence = outcome.confidence if outcome else 0.0
-        abstained = rag_service._is_abstaining(outcome) if outcome else True
+        # ── Phase 3: Validate + persist ───────────────────────────
+        yield _sse_event({"type": "thinking", "stage": "validating"})
+        result = validate_answer(
+            "".join(full_answer_parts),
+            num_sources=len(cited),
+            abstained=abstained,
+            allow_citations=plan.allow_citations if plan else False,
+        )
+        if result.changed:
+            # Frontend replaces the streamed text wholesale.
+            yield _sse_event({"type": "answer_final", "content": result.answer})
 
-        # ── Phase 3: Persist assistant message ────────────────────
-        full_answer = "".join(full_answer_parts)
         assistant_msg = await chat_service.save_assistant_message(
             chat_id=chat_id,
-            content=full_answer,
+            content=result.answer,
             sources=cited,
         )
 
@@ -440,8 +550,8 @@ async def _sse_generator(
 
         await db.commit()
 
-        # ── Phase 4: Warning event (abstention signal) ────────────
-        if abstained:
+        # ── Phase 4: Warning events ───────────────────────────────
+        if abstained and intent == "rag_query":
             code = "no_documents" if not cited else "low_confidence"
             yield _sse_event({
                 "type": "warning",
@@ -453,8 +563,18 @@ async def _sse_generator(
                 ),
                 "confidence": round(confidence, 3),
             })
+        if result.warning_code == "model_abstained":
+            yield _sse_event({
+                "type": "warning",
+                "code": "model_abstained",
+                "message": (
+                    "The model declined to answer even though related "
+                    "content was found — try rephrasing the question."
+                ),
+                "confidence": round(confidence, 3),
+            })
 
-        # ── Phase 5: Sources event ────────────────────────────────
+        # ── Phase 5: Sources event (context-ordered) ──────────────
         yield _sse_event({
             "type": "sources",
             "sources": [
@@ -479,9 +599,17 @@ async def _sse_generator(
 
     except Exception as exc:
         log.error("sse_stream_error", chat_id=str(chat_id), error=str(exc), exc_info=True)
+        # LLMProviderError carries a user-safe message (e.g. "the model timed
+        # out — it may still be loading"); surface it so the user knows whether
+        # to retry. Fall back to a generic message for unexpected errors.
+        user_message = (
+            exc.message
+            if isinstance(exc, LLMProviderError)
+            else "Something went wrong. Please try again."
+        )
         yield _sse_event({
             "type": "error",
-            "message": "Something went wrong. Please try again.",
+            "message": user_message,
         })
     finally:
         # Cancel the producer task if the client disconnected or an error

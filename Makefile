@@ -34,13 +34,14 @@ help:
 	@echo "    make stack-logs       Tail logs from every service"
 	@echo "    make stack-reset      Stop + remove volumes (WIPES data)"
 	@echo ""
-	@echo "  Local-dev workflow (you run uvicorn / npm yourself, deps in Docker)"
+	@echo "  Local-dev workflow (deps in Docker, app on host)"
 	@echo "    make dev-up           Start deps (postgres/redis/qdrant/minio/ollama),"
 	@echo "                          create the bucket, pull the LLM model"
+	@echo "    make dev              Run API + Celery worker + frontend in ONE terminal"
 	@echo "    make dev-down         Stop dep containers"
 	@echo "    make dev-status       Show whether each dep is reachable"
-	@echo "    make worker           Run the Celery worker (Windows-safe pool)"
-	@echo "    make api              Run the FastAPI dev server"
+	@echo "    make worker           Run the Celery worker alone (Windows-safe pool)"
+	@echo "    make api              Run the FastAPI dev server alone"
 	@echo ""
 	@echo "  Database"
 	@echo "    make migrate          Run Alembic migrations against the local DB"
@@ -80,25 +81,45 @@ stack-reset:
 # ── Local dev (deps in Docker, app on host) ───────────────────────
 .PHONY: dev-up dev-down dev-status
 dev-up:
-	$(COMPOSE) up -d postgres redis qdrant minio ollama
+	@echo "Stopping containerized api/worker/postgres. api+worker double-bind"
+	@echo "port 8000 and steal Celery tasks when run alongside the host app."
+	@echo "Postgres runs NATIVELY on this machine (service postgresql-x64-18,"
+	@echo "where the dev data lives) — the container postgres would double-bind"
+	@echo "5432 and split reads/writes across two different databases."
+	-$(COMPOSE) stop api worker postgres 2>/dev/null
+	$(COMPOSE) up -d redis qdrant minio ollama
 	@echo "Re-running bootstraps so model / bucket pick up any .env changes..."
 	-$(COMPOSE) rm -fs minio-bootstrap ollama-bootstrap 2>/dev/null
 	$(COMPOSE) up minio-bootstrap ollama-bootstrap
 	@echo ""
-	@echo "Deps are up. Now in separate terminals (each blocks):"
+	@echo "Deps are up. Now:"
 	@echo "  1)  make migrate     # one-shot, run Alembic migrations"
-	@echo "  2)  make api         # FastAPI server on :8000"
-	@echo "  3)  make worker      # Celery worker (REQUIRED — no worker = uploads stuck pending)"
-	@echo "  4)  npm run dev      # Vite frontend on :3000"
+	@echo "  2)  make dev         # API (:8000) + Celery worker + frontend (:3000)"
+	@echo "                       # all in this one terminal — Ctrl+C stops all"
 
 dev-down:
-	$(COMPOSE) stop postgres redis qdrant minio ollama \
+	$(COMPOSE) stop redis qdrant minio ollama \
 	  minio-bootstrap ollama-bootstrap
 
-# ── App processes (run on the host, one per terminal) ────────────
-.PHONY: api worker
+# ── App processes ─────────────────────────────────────────────────
+# `make dev` = API + worker + frontend in one terminal via concurrently
+# (color-prefixed logs, Ctrl+C stops all three). Run `make dev-up` once
+# first so the Docker deps are alive.
+#
+# NOTE: `make dev` runs uvicorn WITHOUT --reload. On Windows, uvicorn's
+# reloader broadcasts CTRL_C_EVENT to the whole console group when it
+# restarts its worker, which kills the npm/concurrently wrapper (the
+# API dies with KeyboardInterrupt right after a .py file changes).
+# For backend hot-reload, run `make api` in its OWN terminal instead.
+.PHONY: dev api worker
+dev:
+	npm run dev:full
+
+# Port 8010 on purpose: the Docker stack's api container publishes 8000,
+# and Windows lets both bind simultaneously (requests then round-robin
+# between a healthy and a dead server). Separate ports = no collision.
 api:
-	uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+	uvicorn src.main:app --host 127.0.0.1 --port 8010 --reload
 
 # Without this worker the document-upload pipeline is dead: API saves
 # the row + blob, dispatches a Celery task, then nothing pulls it off
@@ -108,7 +129,7 @@ worker:
 	celery -A src.workers.celery_app worker --loglevel=info -Q ingestion,default,celery $(CELERY_POOL_FLAGS)
 
 dev-status:
-	@echo "PostgreSQL:" && $(COMPOSE) exec -T postgres pg_isready -U docusage_user -d docusage || true
+	@echo "PostgreSQL (native):" && "C:\Program Files\PostgreSQL\18\bin\pg_isready.exe" -h localhost -U docusage_user -d docusage || true
 	@echo "Redis:    " && $(COMPOSE) exec -T redis redis-cli ping || true
 	@echo "Qdrant:   " && curl -sf http://localhost:6333/healthz && echo " ok" || true
 	@echo "MinIO:    " && curl -sf http://localhost:9000/minio/health/live && echo " ok" || true

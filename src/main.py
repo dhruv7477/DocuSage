@@ -130,9 +130,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         log.warning("reranker_prewarm_failed", error=str(exc), elapsed_ms=int((_time.monotonic() - _t0) * 1000))
 
     log.info("STARTUP_STEP_4_llm_redis_init_start", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+    _router_llm = None
     try:
-        from src.providers.llm.factory import get_llm_provider
+        from src.providers.llm.factory import get_llm_provider, get_router_llm_provider
         _llm = get_llm_provider()                   # fast — just stores config + httpx client
+        _router_llm = get_router_llm_provider()     # small intent-classifier model
         from src.core.token_blacklist import get_redis
         get_redis()                                 # fast — just stores aioredis client
         log.info("provider_singletons_initialized", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
@@ -148,6 +150,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         if _llm is not None and hasattr(_llm, "warmup"):
             await _llm.warmup()
+        # Warm the small router model too so the first message's intent
+        # classification doesn't wait for it to load off disk.
+        if _router_llm is not None and _router_llm is not _llm and hasattr(_router_llm, "warmup"):
+            await _router_llm.warmup()
         log.info("llm_warmup_done", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
     except Exception as exc:
         log.warning("llm_warmup_failed", error=str(exc), elapsed_ms=int((_time.monotonic() - _t0) * 1000))

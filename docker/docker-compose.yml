@@ -178,11 +178,22 @@ services:
     networks:
       - privateai-net
     restart: unless-stopped
+    # A 7B model needs ~6 GB resident. Without a ceiling the engine
+    # oversubscribes and the Linux OOM killer terminates the container
+    # mid-request (the in-flight chat then times out). Note: this only helps
+    # if Docker Desktop / WSL2 itself has enough memory — raise it to >= 8 GB
+    # (Settings -> Resources, or %UserProfile%\.wslconfig: [wsl2] memory=10GB,
+    # then `wsl --shutdown`). Otherwise the host kills it regardless.
+    mem_limit: 8g
+    mem_reservation: 6g
     healthcheck:
       test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
+      # Loading the model on first run takes a while; don't flap unhealthy
+      # (which would restart the container and unload the model) during it.
+      start_period: 60s
     # GPU support (uncomment if NVIDIA GPU available):
     # deploy:
     #   resources:
@@ -208,17 +219,21 @@ services:
     environment:
       OLLAMA_HOST: http://ollama:11434
       LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b-instruct}
+      # Small model used by the Question Analyzer (intent router).
+      ROUTER_MODEL: ${ROUTER_MODEL:-qwen2.5:1.5b-instruct}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -e
-        echo "Ensuring Ollama model '$$LLM_MODEL' is available..."
-        if ! ollama list 2>/dev/null | awk '{print $$1}' | grep -Fxq "$$LLM_MODEL"; then
-          echo "Pulling $$LLM_MODEL (this may take a while on first run)..."
-          ollama pull "$$LLM_MODEL"
-        else
-          echo "Model $$LLM_MODEL already present."
-        fi
+        for MODEL in "$$LLM_MODEL" "$$ROUTER_MODEL"; do
+          echo "Ensuring Ollama model '$$MODEL' is available..."
+          if ! ollama list 2>/dev/null | awk '{print $$1}' | grep -Fxq "$$MODEL"; then
+            echo "Pulling $$MODEL (this may take a while on first run)..."
+            ollama pull "$$MODEL"
+          else
+            echo "Model $$MODEL already present."
+          fi
+        done
     restart: "no"
 
   # ── MinIO bootstrap: creates the application bucket on first run ──

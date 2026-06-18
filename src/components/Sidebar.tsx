@@ -1,19 +1,19 @@
 import { useState, useEffect } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   MessageSquare, Plus, Zap, ChevronDown,
   Trash2, LogOut, Settings, Settings2, X, Check
 } from 'lucide-react'
 import { clsx } from 'clsx'
-import { formatDistanceToNow } from 'date-fns'
 import toast from 'react-hot-toast'
-import { workspaces as wsApi, chat as chatApi } from '@/api'
+import { workspaces as wsApi, chat as chatApi, type Chat } from '@/api'
 import { useAuth } from '@/store/auth'
 import { useApp } from '@/store/app'
 import { Button } from '@/components/ui/Button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { SettingsModal } from '@/components/SettingsModal'
 import { WorkspaceSettingsModal } from '@/components/WorkspaceSettingsModal'
+import { ChatListSkeleton } from '@/components/Skeletons'
 
 // ── Section header ────────────────────────────────────────────────
 function SectionHeader({ label, onAdd }: { label: string; onAdd?: () => void }) {
@@ -170,22 +170,55 @@ function ChatList() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
 
-  const { data: chats = [] } = useQuery({
+  const { data: chats = [], isLoading: chatsLoading } = useQuery({
     queryKey: ['chats', activeWorkspaceId],
     queryFn: () => chatApi.list(activeWorkspaceId!).then((r) => r.data),
     enabled: !!activeWorkspaceId,
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
   })
 
   const { toggleDocPanel, docPanelOpen } = useApp()
 
+  // Optimistic creation: a placeholder row appears instantly; the real
+  // chat replaces it when the server responds.
   const createMut = useMutation({
     mutationFn: () => chatApi.create(activeWorkspaceId!, undefined),
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: ['chats', activeWorkspaceId] })
+      const previous = qc.getQueryData<Chat[]>(['chats', activeWorkspaceId])
+      const placeholder: Chat = {
+        id: '__optimistic__',
+        workspace_id: activeWorkspaceId!,
+        user_id: '',
+        title: 'New Chat',
+        message_count: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }
+      qc.setQueryData<Chat[]>(['chats', activeWorkspaceId], (old = []) => [placeholder, ...old])
+      setChat('__optimistic__')
+      return { previous }
+    },
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['chats', activeWorkspaceId] })
       setChat(res.data.id)
       if (!docPanelOpen) toggleDocPanel()
     },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) qc.setQueryData(['chats', activeWorkspaceId], context.previous)
+      setChat(null)
+    },
   })
+
+  const prefetchMessages = (chatId: string) => {
+    if (chatId === '__optimistic__') return
+    qc.prefetchQuery({
+      queryKey: ['messages', chatId],
+      queryFn: () => chatApi.messages(chatId).then((r) => r.data),
+      staleTime: 30_000,
+    })
+  }
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => chatApi.delete(id),
@@ -213,7 +246,8 @@ function ChatList() {
         onAdd={activeWorkspaceId ? () => createMut.mutate() : undefined}
       />
       <div className="space-y-0.5 px-2">
-        {chats.length === 0 && (
+        {chatsLoading && chats.length === 0 && <ChatListSkeleton />}
+        {!chatsLoading && chats.length === 0 && (
           <p className="px-2 py-3 text-xs text-dim italic">
             {activeWorkspaceId ? 'No chats yet. Start one above.' : 'Select a workspace first.'}
           </p>
@@ -225,8 +259,10 @@ function ChatList() {
               'group flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer transition-all',
               c.id === activeChatId
                 ? 'bg-teal/10 text-teal'
-                : 'text-subtle hover:text-base hover:bg-surface'
+                : 'text-subtle hover:text-base hover:bg-surface',
+              c.id === '__optimistic__' && 'opacity-60 pointer-events-none'
             )}
+            onMouseEnter={() => prefetchMessages(c.id)}
             onClick={() => { if (editingId !== c.id) setChat(c.id) }}
           >
             <MessageSquare className="w-3.5 h-3.5 shrink-0 opacity-60" />
@@ -285,7 +321,7 @@ export function Sidebar() {
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   return (
-    <aside className="w-56 shrink-0 flex flex-col h-full bg-surface border-r border-border">
+    <aside className="w-56 shrink-0 flex flex-col h-full bg-surface/70 backdrop-blur-xl border-r border-white/5">
       {/* Logo */}
       <div className="h-12 flex items-center gap-2.5 px-4 border-b border-border shrink-0">
         <div className="w-6 h-6 rounded bg-teal/10 border border-teal/30 flex items-center justify-center">

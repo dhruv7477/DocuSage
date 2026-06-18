@@ -177,9 +177,16 @@ export const documents = {
 
   get: (id: string) => api.get<Document>(`/documents/${id}`),
 
-  /** Fetch the original file bytes; used by SourcePanel to feed pdfjs. */
+  /** Fetch the original file bytes (download / non-PDF preview). */
   file: (id: string) =>
     api.get<ArrayBuffer>(`/documents/${id}/file`, { responseType: 'arraybuffer' }),
+
+  /** Server-rendered PNG of one PDF page with the cited chunk highlighted. */
+  pageImage: (id: string, page: number, chunkId?: string, scale = 2) =>
+    api.get<Blob>(`/documents/${id}/page-image`, {
+      params: { page, ...(chunkId ? { chunk_id: chunkId } : {}), scale },
+      responseType: 'blob',
+    }),
 
   delete: (id: string) => api.delete(`/documents/${id}`),
 }

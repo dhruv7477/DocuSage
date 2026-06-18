@@ -29,7 +29,7 @@ What changed vs. the legacy service
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 
 from src.configs.config import get_settings
@@ -41,7 +41,7 @@ from src.providers.llm.base import BaseLLMProvider, LLMConfig
 from src.retrieval.hybrid import HybridRetriever
 from src.retrieval.query_understanding import QueryEnrichment, QueryUnderstanding
 from src.retrieval.reranker import BaseReranker, NoOpReranker, compute_confidence
-from src.services.prompt_builder import PromptBuilder
+from src.services.prompt_builder import BuiltPrompt, PromptBuilder
 from src.vector_store.base import BaseVectorStore, SearchResult
 
 log = get_logger(__name__)
@@ -71,6 +71,7 @@ class RAGResponse:
     context_chunks_used: int = 0
     confidence: float = 0.0
     abstained: bool = False
+    prompt: BuiltPrompt | None = None
 
 
 @dataclass
@@ -79,6 +80,10 @@ class _RetrievalOutcome:
     results: list[SearchResult]
     confidence: float
     enrichment: QueryEnrichment
+    # The prompt actually sent to the LLM. `prompt.included_results[n-1]`
+    # is the chunk behind citation [n] — the orchestrator builds the
+    # sources event from this, never from a re-sorted view.
+    prompt: BuiltPrompt | None = None
 
 
 class RAGService:
@@ -181,6 +186,7 @@ class RAGService:
             context_chunks_used=prompt.context_chunks_used,
             confidence=outcome.confidence,
             abstained=abstained,
+            prompt=prompt,
         )
 
     # ── Streaming ────────────────────────────────────────────────
@@ -250,6 +256,8 @@ class RAGService:
         user: User,
         history_messages: list | None = None,
         document_ids: list[str] | None = None,
+        *,
+        on_stage: "Callable[[str], None] | None" = None,
     ) -> "tuple[_RetrievalOutcome, AsyncIterator[str]]":
         """
         Retrieve context and return (outcome, token_stream) together.
@@ -257,6 +265,9 @@ class RAGService:
         Preferred over stream() for the SSE endpoint — the caller gets the
         retrieval outcome before any tokens are generated, eliminating the
         self.last_outcome instance-state side-channel.
+
+        `on_stage` (optional) is called with "retrieving"/"reranking" as the
+        pipeline advances so the SSE endpoint can surface live progress.
         """
         outcome = await self._retrieve_and_rerank(
             query=query,
@@ -264,6 +275,7 @@ class RAGService:
             user=user,
             history_messages=history_messages,
             document_ids=document_ids,
+            on_stage=on_stage,
         )
         abstained = self._is_abstaining(outcome)
 
@@ -273,6 +285,7 @@ class RAGService:
             history=history_messages,
             abstain=abstained,
         )
+        outcome.prompt = prompt
 
         llm_config = LLMConfig(
             temperature=settings.llm_temperature,
@@ -328,6 +341,7 @@ class RAGService:
         user: User,
         history_messages: list | None,
         document_ids: list[str] | None,
+        on_stage: "Callable[[str], None] | None" = None,
     ) -> _RetrievalOutcome:
         # Build the (role, content) tuples for query understanding.
         # Only the most recent ~4 turns matter; the prompt builder owns
@@ -355,6 +369,8 @@ class RAGService:
             workspace_id=str(workspace_id),
             rewritten=enrichment.rewritten,
         )
+        if on_stage:
+            on_stage("retrieving")
         retrieval = await self._retriever.retrieve(
             workspace_id=workspace_id,
             user_id=user.id,
@@ -367,6 +383,8 @@ class RAGService:
             candidates=len(retrieval.results),
             top_k=self._top_k,
         )
+        if on_stage:
+            on_stage("reranking")
         # Rerank against the user's *original* wording so the cross-
         # encoder is judging answers to what the user actually asked.
         reranked = await self._reranker.rerank(
@@ -392,6 +410,29 @@ class RAGService:
             not outcome.results
             or outcome.confidence < self._abstention_threshold
         )
+
+
+def _results_to_cited(results: list[SearchResult]) -> list[CitedSource]:
+    """
+    Convert search results to CitedSource objects preserving order —
+    NO dedup, NO re-sort. Use with `BuiltPrompt.included_results` so
+    that sources[n-1] is exactly the chunk behind citation [n].
+    """
+    return [
+        CitedSource(
+            document_id=r.payload.document_id,
+            chunk_id=r.chunk_id,
+            source_filename=r.payload.source,
+            page_number=r.payload.page_number,
+            chunk_index=r.payload.chunk_index,
+            relevance_score=round(r.score, 4),
+            heading_path=list(r.payload.heading_path),
+            char_start=r.payload.char_start,
+            char_end=r.payload.char_end,
+            text=r.payload.text,
+        )
+        for r in results
+    ]
 
 
 def _extract_sources(results: list[SearchResult]) -> list[CitedSource]:

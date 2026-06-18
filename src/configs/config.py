@@ -161,6 +161,37 @@ class Settings(BaseSettings):
     # Near-duplicate Jaccard threshold used by the legacy dedup stage.
     dedup_threshold: float = 0.85
 
+    # ── Agentic pipeline ─────────────────────────────────────────
+    # Question Analyzer (intent router): off_topic | doc_summary |
+    # rag_query. Kill switch for debugging — when false, every query
+    # goes straight to the RAG path (pre-router behavior).
+    enable_question_router: bool = True
+    # Heuristics (regex greeting / summary detection) always run first
+    # and are instant. For everything else the LLM router classifies the
+    # message (off_topic / doc_summary / rag_query) so generic questions
+    # get a redirect instead of an unhelpful "not in your documents". It
+    # runs on a SMALL dedicated model (router_model) — not the 7B answer
+    # model — so classifying every message stays cheap (~1-5s on CPU).
+    router_use_llm: bool = True
+    # Small, fast instruct model used ONLY for intent classification.
+    # qwen2.5:1.5b-instruct is ~1 GB, same family as the answer model,
+    # and reliable at JSON-mode classification. Override with ROUTER_MODEL.
+    router_model: str = "qwen2.5:1.5b-instruct"
+    # Fail open to rag_query if the router doesn't answer within this
+    # budget. Generous so a cold router-model load doesn't fail open on
+    # the first message; a warm 1.5B classify is only a few seconds.
+    router_timeout_seconds: float = 30.0
+    router_max_tokens: int = 150
+    # Prompt token budgets. CPU prefill is the latency bottleneck on a
+    # local 7B model — 2500 context tokens ≈ 10-25s faster than 4000.
+    rag_context_tokens: int = 2500
+    rag_history_tokens: int = 1000
+    # DocSummaryService (map-reduce over a document's chunks).
+    summary_map_token_budget: int = 2500
+    summary_section_max_tokens: int = 350
+    summary_final_max_tokens: int = 700
+    summary_max_total_chunks: int = 500
+
     # ── OAuth ────────────────────────────────────────────────────
     google_client_id: str = ""
 

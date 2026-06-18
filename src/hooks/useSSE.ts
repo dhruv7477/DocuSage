@@ -2,16 +2,34 @@ import { useCallback, useRef, useState } from 'react'
 import { fetchEventSource } from '@microsoft/fetch-event-source'
 import type { CitedSource } from '@/api'
 
-export type WarningCode = 'low_confidence' | 'no_documents' | 'partial_context' | string
+export type WarningCode =
+  | 'low_confidence'
+  | 'no_documents'
+  | 'model_abstained'
+  | 'abstention_mismatch'
+  | 'summary_truncated'
+  | string
 
 export interface StreamWarning {
   code: WarningCode
   message: string
 }
 
+export type ThinkingStage =
+  | 'analyzing'
+  | 'routing'
+  | 'retrieving'
+  | 'reranking'
+  | 'generating'
+  | 'summarizing'
+  | 'validating'
+  | null
+
 interface StreamState {
   streaming: boolean
-  stage: 'retrieving' | 'generating' | null
+  stage: ThinkingStage
+  intent: string | null
+  startedAt: number | null
   content: string
   sources: CitedSource[]
   warnings: StreamWarning[]
@@ -27,6 +45,8 @@ interface UseSSEReturn extends StreamState {
 const initialState: StreamState = {
   streaming: false,
   stage: null,
+  intent: null,
+  startedAt: null,
   content: '',
   sources: [],
   warnings: [],
@@ -51,22 +71,49 @@ export function useSSE(): UseSSEReturn {
     const ctrl = new AbortController()
     abortRef.current = ctrl
 
-    setState({ ...initialState, streaming: true })
+    setState({ ...initialState, streaming: true, startedAt: Date.now() })
 
     const token = localStorage.getItem('access_token')
 
     fetchEventSource(url, {
       signal: ctrl.signal,
       headers: token ? { Authorization: `Bearer ${token}` } : {},
+      // Default is false, which ABORTS the stream when the tab is hidden
+      // and silently retries on return — every retry re-sends the GET,
+      // which re-saves the user message and restarts the whole pipeline.
+      openWhenHidden: true,
+      // A closed connection must surface as an error, never auto-retry:
+      // retrying this GET has side effects (duplicate user messages).
+      // Throwing stops the library's built-in retry loop.
+      onclose() {
+        setState((s) => {
+          if (!s.streaming) return s  // closed after done/error — normal
+          return {
+            ...s,
+            streaming: false,
+            stage: null,
+            error: s.error ?? 'The connection closed before the answer finished. Please try again.',
+          }
+        })
+        throw new Error('SSE connection closed by server')
+      },
       onmessage(e) {
         try {
           const event = JSON.parse(e.data)
           switch (event.type) {
             case 'thinking':
+              // The server owns stage transitions — trust them verbatim.
               setState((s) => ({ ...s, stage: event.stage ?? null }))
               break
+            case 'route':
+              setState((s) => ({ ...s, intent: event.intent ?? null }))
+              break
             case 'token':
-              setState((s) => ({ ...s, stage: 'generating', content: s.content + event.content }))
+              setState((s) => ({ ...s, content: s.content + event.content }))
+              break
+            case 'answer_final':
+              // Validator corrected the answer — replace wholesale.
+              setState((s) => ({ ...s, content: event.content ?? s.content }))
               break
             case 'sources':
               setState((s) => ({ ...s, sources: event.sources }))

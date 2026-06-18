@@ -13,9 +13,12 @@ Endpoints:
 
 Authentication: JWT required + role must be SUPER_ADMIN.
 Rate limiting: 60 req/min (same as default, admin actions are rare).
-"""
 
-from __future__ import annotations
+NOTE: no `from __future__ import annotations` here — the slowapi
+@limiter.limit wrapper breaks deferred-annotation resolution (FastAPI
+ends up evaluating ForwardRef('uuid.UUID') in slowapi's namespace and
+crashes at router-include time with NameError).
+"""
 
 import uuid
 from datetime import datetime
