@@ -166,13 +166,15 @@ class Settings(BaseSettings):
     # rag_query. Kill switch for debugging — when false, every query
     # goes straight to the RAG path (pre-router behavior).
     enable_question_router: bool = True
-    # Heuristics (regex greeting / summary detection) always run first
-    # and are instant. For everything else the LLM router classifies the
-    # message (off_topic / doc_summary / rag_query) so generic questions
-    # get a redirect instead of an unhelpful "not in your documents". It
-    # runs on a SMALL dedicated model (router_model) — not the 7B answer
-    # model — so classifying every message stays cheap (~1-5s on CPU).
-    router_use_llm: bool = True
+    # Heuristics (regex greeting / summary detection) always run first and
+    # are instant. The "is this about the documents?" decision is then made
+    # by the RETRIEVAL SCORE, not an LLM: non-heuristic queries go to RAG,
+    # and if retrieval finds nothing relevant (abstention) the orchestrator
+    # declines. The reranker confidence measures doc-relevance directly and
+    # is far more reliable than a small LLM classifier (which both answered
+    # off-topic questions and wrongly refused real ones). Leave this False;
+    # the LLM router (router_model) is an opt-in fallback only.
+    router_use_llm: bool = False
     # Small, fast instruct model used ONLY for intent classification.
     # qwen2.5:1.5b-instruct is ~1 GB, same family as the answer model,
     # and reliable at JSON-mode classification. Override with ROUTER_MODEL.
@@ -187,10 +189,21 @@ class Settings(BaseSettings):
     rag_context_tokens: int = 2500
     rag_history_tokens: int = 1000
     # DocSummaryService (map-reduce over a document's chunks).
-    summary_map_token_budget: int = 2500
+    # Material up to this many tokens is summarized in ONE streamed pass
+    # (no map phase). Most real documents fit, so the common case is a
+    # single LLM call instead of N sequential map calls — far faster on a
+    # CPU model. Larger docs are map-reduced down to this budget first.
+    summary_context_token_budget: int = 6000
+    # Per-segment input budget during the map phase (large docs only).
+    # Bigger segments → fewer map calls → less total decode on CPU.
+    summary_map_token_budget: int = 3000
     summary_section_max_tokens: int = 350
     summary_final_max_tokens: int = 700
     summary_max_total_chunks: int = 500
+    # Summaries feed whole-document context to the model, so a single call
+    # can run much longer than a chat turn — give it its own (larger)
+    # timeout instead of the chat llm_timeout_seconds.
+    summary_timeout_seconds: int = 600
 
     # ── OAuth ────────────────────────────────────────────────────
     google_client_id: str = ""

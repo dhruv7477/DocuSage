@@ -70,10 +70,16 @@ class BaseLLMProvider(ABC):
         self,
         messages: list[LLMMessage],
         config: LLMConfig | None = None,
+        *,
+        timeout: float | None = None,
     ) -> LLMResponse:
         """
         Send messages and return the complete response.
         Use for non-streaming calls (e.g. query rewriting, classification).
+
+        `timeout` overrides the provider's default request timeout for this
+        call only (e.g. summaries need longer than a chat turn). None =
+        use the provider's configured default.
         """
         ...
 
@@ -82,10 +88,15 @@ class BaseLLMProvider(ABC):
         self,
         messages: list[LLMMessage],
         config: LLMConfig | None = None,
+        *,
+        timeout: float | None = None,
     ) -> AsyncIterator[str]:
         """
         Send messages and yield response chunks as they arrive.
         Use for chat SSE endpoints where latency perception matters.
+
+        `timeout` overrides the provider's default request timeout for this
+        call only. None = use the provider's configured default.
         """
         ...
 

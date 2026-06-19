@@ -142,21 +142,38 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         log.warning("provider_init_failed", error=str(exc), elapsed_ms=int((_time.monotonic() - _t0) * 1000))
         _llm = None
 
-    # Pre-load the LLM into RAM so the first query doesn't wait 30-90 s for
-    # Ollama to pull the model off disk. health() only checks /api/tags (model
-    # is pulled); warmup() sends a zero-generation request that actually loads
-    # the weights into memory and keeps them there for 30 min.
-    log.info("STARTUP_STEP_4b_llm_warmup_start", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
-    try:
-        if _llm is not None and hasattr(_llm, "warmup"):
-            await _llm.warmup()
-        # Warm the small router model too so the first message's intent
-        # classification doesn't wait for it to load off disk.
-        if _router_llm is not None and _router_llm is not _llm and hasattr(_router_llm, "warmup"):
-            await _router_llm.warmup()
-        log.info("llm_warmup_done", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
-    except Exception as exc:
-        log.warning("llm_warmup_failed", error=str(exc), elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+    # Pre-load the LLMs into RAM so the first query doesn't wait 30-90 s for
+    # Ollama to pull a model off disk. warmup() sends a zero-generation
+    # request that loads the weights and keeps them there for 30 min.
+    #
+    # Run it in the BACKGROUND — never `await` it inline. A 7B load on CPU
+    # can take minutes (longer under memory pressure), and awaiting it here
+    # blocks the whole lifespan, so the server never binds its port and the
+    # entire API is unreachable until warmup returns. Scheduling it lets
+    # startup finish and bind immediately; the first query just pays the
+    # load cost if it arrives before warmup completes.
+    log.info("STARTUP_STEP_4b_llm_warmup_scheduled", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+
+    async def _warm_models() -> None:
+        try:
+            if _llm is not None and hasattr(_llm, "warmup"):
+                await _llm.warmup()
+            # Warm the small router model only if the LLM intent router is
+            # actually enabled. With router_use_llm=False (retrieval-score
+            # routing) it's never called, so warming it would waste ~1 GB.
+            if (
+                settings.router_use_llm
+                and _router_llm is not None
+                and _router_llm is not _llm
+                and hasattr(_router_llm, "warmup")
+            ):
+                await _router_llm.warmup()
+            log.info("llm_warmup_done")
+        except Exception as exc:
+            log.warning("llm_warmup_failed", error=str(exc))
+
+    # Keep a reference on app.state so the task isn't garbage-collected.
+    app.state.warmup_task = asyncio.create_task(_warm_models())
 
     log.info("STARTUP_STEP_5_readiness_probes_start", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
 
@@ -193,6 +210,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield  # App runs here
 
     log.info("app_shutdown")
+    # Cancel the background warmup if it's still running at shutdown.
+    warmup_task = getattr(app.state, "warmup_task", None)
+    if warmup_task is not None and not warmup_task.done():
+        warmup_task.cancel()
+        try:
+            await warmup_task
+        except (asyncio.CancelledError, Exception):
+            pass
 
 
 # ── App Factory ───────────────────────────────────────────────────

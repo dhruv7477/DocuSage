@@ -46,7 +46,7 @@ def _mock_llm() -> AsyncMock:
     llm = AsyncMock()
     llm.generate.return_value = LLMResponse(content="- bullet", model="test")
 
-    async def _stream(messages, config=None):
+    async def _stream(messages, config=None, *, timeout=None):
         for tok in ["Executive ", "summary."]:
             yield tok
 
@@ -117,6 +117,50 @@ class TestSinglePass:
 
 
 class TestMapReduce:
+
+    @pytest.mark.asyncio
+    async def test_medium_doc_streams_single_pass_below_context_budget(self):
+        # A doc larger than the per-segment map budget but within the
+        # context budget must NOT map — it streams in one pass. (Before the
+        # single-pass/map split this mapped on the smaller map budget,
+        # making medium docs needlessly slow.)
+        store = AsyncMock()
+        store.list_document_chunks.return_value = [
+            _chunk("word " * 200, i) for i in range(12)
+        ]
+        llm = _mock_llm()
+        outcome, stream = await _service(
+            store, llm, context_budget=10_000, map_token_budget=500
+        ).prepare_summary_stream(
+            workspace_id=uuid.uuid4(),
+            user=_make_user(),
+            documents=[("doc-1", "report.pdf")],
+            query="summarize",
+        )
+        [t async for t in stream]
+
+        assert outcome.map_calls == 0
+        llm.generate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_summary_timeout_passed_to_map_calls(self):
+        # Map calls must carry the (longer) summary timeout, not the chat one.
+        store = AsyncMock()
+        store.list_document_chunks.return_value = [
+            _chunk("word " * 400, i) for i in range(6)
+        ]
+        llm = _mock_llm()
+        await _service(
+            store, llm,
+            context_budget=500, map_token_budget=500, timeout_seconds=123,
+        ).prepare_summary_stream(
+            workspace_id=uuid.uuid4(),
+            user=_make_user(),
+            documents=[("doc-1", "report.pdf")],
+            query="summarize",
+        )
+        assert llm.generate.await_count > 0
+        assert llm.generate.await_args.kwargs["timeout"] == 123
 
     @pytest.mark.asyncio
     async def test_large_doc_triggers_map_calls(self):

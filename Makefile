@@ -7,7 +7,10 @@
 # the source of most "I ran the API but Redis wasn't up" reports.
 
 COMPOSE       ?= docker compose --env-file .env -f docker/docker-compose.yml
-LLM_MODEL     ?= qwen2.5:7b-instruct
+# Dev answer model: 3B on this ARM/CPU box (fits 16 GB, ~2x faster than 7B).
+# Prod uses the 7B on GPU via docker-compose.prod.yml. Override: make LLM_MODEL=...
+LLM_MODEL     ?= qwen2.5:3b-instruct
+ROUTER_MODEL  ?= qwen2.5:1.5b-instruct
 MINIO_BUCKET  ?= privateai-docs
 
 # Celery's default `prefork` pool does not work on Windows — workers
@@ -37,6 +40,7 @@ help:
 	@echo "  Local-dev workflow (deps in Docker, app on host)"
 	@echo "    make dev-up           Start deps (postgres/redis/qdrant/minio/ollama),"
 	@echo "                          create the bucket, pull the LLM model"
+	@echo "    make dev-up-native    Like dev-up but Ollama runs NATIVELY (ARM64/Snapdragon)"
 	@echo "    make dev              Run API + Celery worker + frontend in ONE terminal"
 	@echo "    make dev-down         Stop dep containers"
 	@echo "    make dev-status       Show whether each dep is reachable"
@@ -100,6 +104,37 @@ dev-up:
 dev-down:
 	$(COMPOSE) stop redis qdrant minio ollama \
 	  minio-bootstrap ollama-bootstrap
+
+
+# ── Native Ollama (Windows ARM64 / Snapdragon dev) ────────────────
+# This machine is ARM64 (Snapdragon X). Running Ollama NATIVELY instead
+# of in the WSL2 Docker container uses the Oryon CPU directly and avoids
+# the WSL2 memory caps that OOM-kill the model and wedge the engine.
+# One-time: install native Ollama (Windows ARM64) from
+# https://ollama.com/download — it runs a background service on :11434.
+# Then use `make dev-up-native` instead of `make dev-up`.
+.PHONY: dev-up-native ollama-pull
+dev-up-native:
+	@echo "Native-Ollama dev: deps in Docker, Ollama native on :11434."
+	-$(COMPOSE) stop api worker postgres ollama ollama-bootstrap 2>/dev/null
+	$(COMPOSE) up -d redis qdrant minio
+	-$(COMPOSE) rm -fs minio-bootstrap 2>/dev/null
+	$(COMPOSE) up minio-bootstrap
+	@$(MAKE) ollama-pull
+	@echo ""
+	@echo "Deps up + models pulled. Make sure native Ollama is running"
+	@echo "(curl http://localhost:11434/api/tags), then: make dev"
+
+# Pull answer + router models into the NATIVE Ollama via its HTTP API.
+# Uses curl (always on PATH via System32) instead of the `ollama` CLI,
+# which GNU Make on Windows can't resolve (CreateProcess doesn't add .exe
+# / search PATH like a shell). Idempotent: already-present models return
+# fast. Requires native Ollama running on :11434.
+ollama-pull:
+	@echo "Pulling models into native Ollama (:11434): $(LLM_MODEL), $(ROUTER_MODEL)"
+	@curl -fsS http://localhost:11434/api/pull -d '{"name":"$(LLM_MODEL)"}' >/dev/null || (echo "ERROR: native Ollama not reachable on :11434 — is it installed and running?" && exit 1)
+	@curl -fsS http://localhost:11434/api/pull -d '{"name":"$(ROUTER_MODEL)"}' >/dev/null
+
 
 # ── App processes ─────────────────────────────────────────────────
 # `make dev` = API + worker + frontend in one terminal via concurrently

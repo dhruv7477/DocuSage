@@ -31,10 +31,14 @@ from src.providers.llm.base import BaseLLMProvider, LLMConfig, LLMMessage
 
 log = get_logger(__name__)
 
-# Used when the router says off_topic but forgot to write a reply.
+# The fixed reply shown when a question can't be answered from the documents
+# — either it's off-topic, or retrieval found nothing relevant. It is never
+# composed by an LLM (a small model answers the off-topic question itself
+# even when told not to), so it's hard-coded to guarantee a clean decline.
 FALLBACK_OFF_TOPIC_REPLY = (
-    "I'm your document assistant — I can answer questions about the files "
-    "in this workspace or summarize them for you. What would you like to know?"
+    "I couldn't find anything about that in your documents. I can only answer "
+    "questions about the documents in this workspace — try rephrasing, or ask "
+    "for a summary."
 )
 
 GREETING_REPLY = (
@@ -65,17 +69,17 @@ _SUMMARY_RE = re.compile(
 
 _VALID_INTENTS = ("off_topic", "doc_summary", "rag_query")
 
-_SYSTEM_PROMPT = """You are the request router for a private document Q&A assistant.
+_SYSTEM_PROMPT = """You are the request router for a private document Q&A assistant. Your ONLY job is to classify the user's message. You never answer it.
 
-Classify the user's message into exactly one intent:
+Classify into exactly one intent:
 - "rag_query": a question that could plausibly be answered from the content of the user's uploaded documents.
 - "doc_summary": asks for a summary, overview, executive summary, or "what is this document about" for one or more whole documents.
-- "off_topic": greetings, small talk, OR any question that is not about the user's documents — including general knowledge and trivia (e.g. "what is the capital of India", "who won the world cup", weather, news, math puzzles, coding help). For these, also write "reply": a brief, friendly 1-2 sentence response. If it is a greeting, greet back. Otherwise, tell the user you can only answer questions about the documents in this workspace, and invite them to ask something about their documents or request a summary. Do NOT actually answer the off-topic question.
+- "off_topic": greetings, small talk, or ANY question that is not about the user's documents — general knowledge, trivia, definitions, weather, news, math, coding help, opinions (e.g. "what is a boy", "what is the capital of India", "who won the world cup", "how are you").
 
-When unsure between rag_query and off_topic, prefer off_topic only for clearly general-knowledge questions; otherwise use rag_query.
+When unsure between rag_query and off_topic, choose off_topic only for clearly general-knowledge questions; otherwise use rag_query.
 
-Respond with ONLY this JSON object, no other text:
-{"intent": "rag_query" | "doc_summary" | "off_topic", "reply": "<only for off_topic, else empty string>", "documents": ["<filename fragments the user referenced; empty array means all documents>"]}"""
+Respond with ONLY this JSON object — no other text, no answer, no explanation:
+{"intent": "rag_query" | "doc_summary" | "off_topic", "documents": ["<filename fragments the user referenced; empty array means all documents>"]}"""
 
 
 @dataclass
@@ -168,7 +172,10 @@ class QuestionAnalyzer:
 
         reply: str | None = None
         if intent == "off_topic":
-            reply = (raw.get("reply") or "").strip() or FALLBACK_OFF_TOPIC_REPLY
+            # Router classifies only — it does NOT write the reply. Always use
+            # the fixed refusal so off-topic questions are reliably declined,
+            # never answered (a small model answers them even when told not to).
+            reply = FALLBACK_OFF_TOPIC_REPLY
 
         target_ids = _resolve_documents(raw.get("documents") or [], documents)
 

@@ -11,14 +11,15 @@ Algorithm
 1. Fetch ALL chunks for each target document straight from Qdrant by
    document_id (no vector search — summaries need the whole document,
    not the most-similar slices).
-2. If the combined text fits `summary_map_token_budget`, skip the map
-   phase entirely (single LLM pass).
-3. Otherwise MAP: pack consecutive chunks into token-budgeted segments
-   (never splitting a chunk, never mixing documents) and bullet-point
-   each segment with a non-streaming LLM call. Sequential on purpose —
-   local CPU Ollama serializes requests anyway.
-4. REDUCE: join the bullets; if still over budget, one more map round
-   (2 levels max, then hard-truncate — logged).
+2. If the combined text fits `summary_context_token_budget`, skip the map
+   phase entirely (single streamed LLM pass) — the common case for most
+   real documents, and far faster on a CPU model than N map calls.
+3. Otherwise MAP: pack consecutive chunks into `summary_map_token_budget`
+   segments (never splitting a chunk, never mixing documents) and
+   bullet-point each segment with a non-streaming LLM call. Sequential on
+   purpose — local CPU Ollama serializes requests anyway.
+4. REDUCE: join the bullets; if still over the context budget, one more
+   map round (2 levels max, then hard-truncate — logged).
 5. FINAL (the "Executive Summary agent"): one streamed LLM call that
    turns the condensed material into a professional, human-friendly
    executive summary. The user's original phrasing steers the focus
@@ -80,17 +81,23 @@ class DocSummaryService:
         vector_store: BaseVectorStore,
         llm: BaseLLMProvider,
         *,
+        context_budget: int | None = None,
         map_token_budget: int | None = None,
         section_max_tokens: int | None = None,
         final_max_tokens: int | None = None,
         max_total_chunks: int | None = None,
+        timeout_seconds: float | None = None,
     ) -> None:
         self._vector_store = vector_store
         self._llm = llm
+        # Single-pass threshold: material at or under this is summarized in
+        # one streamed call (no map phase). Larger docs map-reduce to here.
+        self._context_budget = context_budget or settings.summary_context_token_budget
         self._map_budget = map_token_budget or settings.summary_map_token_budget
         self._section_max_tokens = section_max_tokens or settings.summary_section_max_tokens
         self._final_max_tokens = final_max_tokens or settings.summary_final_max_tokens
         self._max_total_chunks = max_total_chunks or settings.summary_max_total_chunks
+        self._timeout = timeout_seconds or settings.summary_timeout_seconds
 
     async def prepare_summary_stream(
         self,
@@ -153,9 +160,12 @@ class DocSummaryService:
                 )
             return outcome, _empty()
 
-        # ── Map-reduce until material fits the final-pass budget ──
+        # ── Map-reduce only if the doc is too big for a single pass ──
+        # Material within context_budget streams directly (no map calls) —
+        # the common case. Bigger docs are compressed down to context_budget
+        # by mapping into segment-budget chunks, at most 2 levels.
         level = 0
-        while count_tokens(material) > self._map_budget and level < 2:
+        while count_tokens(material) > self._context_budget and level < 2:
             level += 1
             segments = _pack_segments(doc_texts if level == 1 else [material], self._map_budget)
             log.info(
@@ -172,15 +182,16 @@ class DocSummaryService:
                         LLMMessage(role="user", content=segment),
                     ],
                     LLMConfig(temperature=0.2, max_tokens=self._section_max_tokens),
+                    timeout=self._timeout,
                 )
                 bullets.append(response.content.strip())
                 outcome.map_calls += 1
             material = "\n\n".join(bullets)
 
-        if count_tokens(material) > self._map_budget:
+        if count_tokens(material) > self._context_budget:
             # 2 reduce levels weren't enough — hard truncate, keep the head.
             log.warning("summary_truncated_after_reduce", tokens=count_tokens(material))
-            material = _truncate_to_tokens(material, self._map_budget)
+            material = _truncate_to_tokens(material, self._context_budget)
             outcome.truncated = True
 
         # ── Final pass: streamed executive summary ────────────────
@@ -206,7 +217,9 @@ class DocSummaryService:
 
         async def _token_iter() -> AsyncIterator[str]:
             try:
-                async for token in self._llm.stream(final_messages, llm_config):
+                async for token in self._llm.stream(
+                    final_messages, llm_config, timeout=self._timeout
+                ):
                     yield token
             except LLMProviderError:
                 raise

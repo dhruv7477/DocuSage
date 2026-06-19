@@ -178,14 +178,14 @@ services:
     networks:
       - privateai-net
     restart: unless-stopped
-    # A 7B model needs ~6 GB resident. Without a ceiling the engine
-    # oversubscribes and the Linux OOM killer terminates the container
-    # mid-request (the in-flight chat then times out). Note: this only helps
-    # if Docker Desktop / WSL2 itself has enough memory — raise it to >= 8 GB
-    # (Settings -> Resources, or %UserProfile%\.wslconfig: [wsl2] memory=10GB,
-    # then `wsl --shutdown`). Otherwise the host kills it regardless.
-    mem_limit: 8g
-    mem_reservation: 6g
+    # Ollama keeps the 7B (~4.6 GB) + 1.5B router (~1.1 GB) resident, so it
+    # needs ~7-8 GB. This cap only helps if the WSL2 VM itself has the RAM —
+    # the default ~8 GB VM also hosts qdrant/minio/redis, so Ollama swaps and
+    # generation crawls to <1 tok/s. Raise the VM in %UserProfile%\.wslconfig
+    # ([wsl2] memory=11GB) then `wsl --shutdown` + restart Docker. With an
+    # 11 GB VM this 9 GB cap leaves headroom for the other dep containers.
+    mem_limit: 9g
+    mem_reservation: 7g
     healthcheck:
       test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
       interval: 30s

@@ -367,6 +367,18 @@ class QdrantVectorStore(BaseVectorStore):
                 if offset is None:
                     break
         except UnexpectedResponse as exc:
+            if exc.status_code == 404:
+                # Collection doesn't exist — the workspace was never indexed,
+                # or the vector store was reset (its volume wiped) while the
+                # Postgres Document row survived. Treat as "no chunks" so the
+                # summary path degrades to a graceful "no indexed content,
+                # re-process the document" note instead of a 500.
+                log.warning(
+                    "document_chunks_collection_missing",
+                    document_id=document_id,
+                    collection=name,
+                )
+                return []
             raise VectorStoreError(
                 f"Failed to list chunks for document '{document_id}'",
                 detail=str(exc),

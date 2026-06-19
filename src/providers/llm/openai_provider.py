@@ -38,10 +38,13 @@ class OpenAIProvider(BaseLLMProvider):
         self,
         messages: list[LLMMessage],
         config: LLMConfig | None = None,
+        *,
+        timeout: float | None = None,
     ) -> LLMResponse:
         cfg = config or LLMConfig()
+        client = self._client.with_options(timeout=timeout) if timeout else self._client
         try:
-            resp = await self._client.chat.completions.create(
+            resp = await client.chat.completions.create(
                 model=self._model,
                 messages=[{"role": m.role, "content": m.content} for m in messages],
                 temperature=cfg.temperature,
@@ -68,10 +71,13 @@ class OpenAIProvider(BaseLLMProvider):
         self,
         messages: list[LLMMessage],
         config: LLMConfig | None = None,
+        *,
+        timeout: float | None = None,
     ) -> AsyncIterator[str]:
         cfg = config or LLMConfig()
+        client = self._client.with_options(timeout=timeout) if timeout else self._client
         try:
-            async with await self._client.chat.completions.create(
+            async with await client.chat.completions.create(
                 model=self._model,
                 messages=[{"role": m.role, "content": m.content} for m in messages],
                 temperature=cfg.temperature,

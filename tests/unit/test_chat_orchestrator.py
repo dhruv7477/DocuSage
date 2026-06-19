@@ -165,6 +165,28 @@ class TestRouting:
         assert plan.sources[0].source_filename == "report.pdf"
         assert plan.confidence == 0.9
 
+    @pytest.mark.asyncio
+    async def test_rag_abstention_declines_as_off_topic(self):
+        # The retrieval score is the "is this about the documents?" classifier:
+        # when RAG finds nothing relevant (abstains), the orchestrator declines
+        # with the fixed reply instead of generating a "can't find" answer.
+        from src.services.question_analyzer import FALLBACK_OFF_TOPIC_REPLY
+
+        rag = _mock_rag(abstained=True)
+        orch = ChatOrchestrator(
+            _analyzer(RouteDecision(intent="rag_query")),
+            rag, _mock_summary(), enable_router=True,
+        )
+        plan, events = await _prepare(orch, query="what is the capital of france?")
+
+        assert plan.intent == "off_topic"
+        assert not plan.allow_citations
+        text = "".join([t async for t in plan.token_iter])
+        assert text == FALLBACK_OFF_TOPIC_REPLY
+        # The route event is corrected to off_topic for the UI.
+        intents = [e["intent"] for e in events if e.get("type") == "route"]
+        assert "off_topic" in intents
+
 
 class TestEmittedEvents:
 

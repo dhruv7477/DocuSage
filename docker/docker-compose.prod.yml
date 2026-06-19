@@ -27,6 +27,7 @@ volumes:
   redis_data:
   minio_data:
   ollama_data:
+  hf_cache:        # HuggingFace weights cache for the vLLM GPU service
   nginx_certs:
 
 services:
@@ -70,7 +71,11 @@ services:
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/2
       QDRANT_URL: http://qdrant:6333
       MINIO_ENDPOINT: minio:9000
+      # LLM backend is chosen in .env.prod via LLM_PROVIDER:
+      #   vllm   → GPU inference (set LLM_PROVIDER=vllm; uses VLLM_BASE_URL)
+      #   ollama → CPU fallback  (set LLM_PROVIDER=ollama; uses OLLAMA_BASE_URL)
       OLLAMA_BASE_URL: http://ollama:11434
+      VLLM_BASE_URL: http://vllm:8001/v1
     depends_on:
       postgres:
         condition: service_healthy
@@ -119,6 +124,7 @@ services:
       QDRANT_URL: http://qdrant:6333
       MINIO_ENDPOINT: minio:9000
       OLLAMA_BASE_URL: http://ollama:11434
+      VLLM_BASE_URL: http://vllm:8001/v1
     depends_on:
       - api
     networks:
@@ -268,7 +274,54 @@ services:
       timeout: 10s
       retries: 3
 
-  # ── Ollama (LLM inference) ────────────────────────────────────
+  # ── vLLM (GPU LLM inference — PRODUCTION DEFAULT) ──────────────
+  # Fast, OpenAI-compatible serving on an NVIDIA GPU. The app uses it when
+  # LLM_PROVIDER=vllm in .env.prod — same code as the dev Ollama path, just
+  # a different provider (the VLLMProvider is an OpenAI-compatible client).
+  #
+  # Requirements: an NVIDIA GPU on the host + the NVIDIA Container Toolkit.
+  # Docker GPU passthrough is NVIDIA-only (works here in prod; it does NOT
+  # work for integrated/ARM GPUs like Snapdragon Adreno — those stay on the
+  # dev CPU path). vLLM serves ONE model, so set ROUTER_MODEL= (empty) in
+  # .env.prod and the intent router reuses this model (fast on GPU).
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: docusage-vllm
+    expose:
+      - "8001"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    environment:
+      HUGGING_FACE_HUB_TOKEN: ${HF_TOKEN:-}
+    networks:
+      - privateai-net
+    restart: unless-stopped
+    # `--served-model-name` makes vLLM answer to the app's LLM_MODEL value,
+    # so .env.prod's LLM_MODEL must match it (default: qwen2.5-7b-instruct).
+    command: >
+      --model ${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}
+      --served-model-name ${LLM_MODEL:-qwen2.5-7b-instruct}
+      --port 8001
+      --api-key ${VLLM_API_KEY:-token-vllm}
+      --max-model-len 8192
+      --gpu-memory-utilization 0.90
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s   # weight download + GPU load on first boot
+      retries: 5
+
+  # ── Ollama (CPU LLM inference — fallback, no GPU) ─────────────
+  # Used only when LLM_PROVIDER=ollama (deployments without an NVIDIA GPU).
+  # For GPU production use the vllm service above instead.
   ollama:
     image: ollama/ollama:latest
     container_name: docusage-ollama
@@ -286,7 +339,8 @@ services:
           memory: 48G   # LLaMA 3.3 70B needs ~40GB
         reservations:
           memory: 8G
-    # GPU: uncomment for NVIDIA
+    # Ollama can also use an NVIDIA GPU (uncomment), but vLLM above is the
+    # recommended GPU server for production throughput.
     # runtime: nvidia
     # environment:
     #   NVIDIA_VISIBLE_DEVICES: all

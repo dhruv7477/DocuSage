@@ -90,17 +90,21 @@ class TestLLMTier:
     """Tier 2 — only with use_llm=True, for non-heuristic queries."""
 
     @pytest.mark.asyncio
-    async def test_off_topic_uses_router_reply(self):
+    async def test_off_topic_uses_fixed_refusal_never_answers(self):
+        # The router classifies only. Even if the model tries to ANSWER the
+        # off-topic question in a 'reply' field, we discard it and use the
+        # fixed refusal — so off-topic questions are never answered.
         llm = _llm_returning({
             "intent": "off_topic",
-            "reply": "I can't help with the weather, but ask me about your docs!",
+            "reply": "A boy is typically a male child.",  # model trying to answer
             "documents": [],
         })
         decision = await QuestionAnalyzer(llm, use_llm=True).analyze(
-            "what will the weather be like in delhi tomorrow?", documents=DOCS
+            "what is a boy?", documents=DOCS
         )
         assert decision.intent == "off_topic"
-        assert decision.reply == "I can't help with the weather, but ask me about your docs!"
+        assert decision.reply == FALLBACK_OFF_TOPIC_REPLY
+        assert "male child" not in decision.reply
 
     @pytest.mark.asyncio
     async def test_generic_knowledge_question_reaches_llm_and_redirects(self):

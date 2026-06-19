@@ -25,7 +25,11 @@ from dataclasses import dataclass, field
 from src.core.logger import get_logger
 from src.models.user import User
 from src.services.doc_summary_service import DocSummaryService
-from src.services.question_analyzer import QuestionAnalyzer, RouteDecision
+from src.services.question_analyzer import (
+    FALLBACK_OFF_TOPIC_REPLY,
+    QuestionAnalyzer,
+    RouteDecision,
+)
 from src.services.rag_service import CitedSource, RAGService, _results_to_cited
 
 log = get_logger(__name__)
@@ -147,13 +151,34 @@ class ChatOrchestrator:
             document_ids=document_ids,
             on_stage=lambda s: emit({"type": "thinking", "stage": s}),
         )
+
+        # Retrieval score = the "is this about the documents?" classifier.
+        # If nothing in the workspace documents is relevant (no results, or
+        # reranker confidence below the abstention threshold), this isn't a
+        # question we can answer from the docs — decline with a fixed reply
+        # instead of generating. The embedding/rerank score measures
+        # doc-relevance directly, so it's far more reliable than a small LLM
+        # intent classifier (which both answered off-topic questions and
+        # wrongly refused real document questions). Tune via ABSTENTION_THRESHOLD.
+        if self._rag._is_abstaining(outcome):
+            async def _decline() -> AsyncIterator[str]:
+                for i in range(0, len(FALLBACK_OFF_TOPIC_REPLY), _OFF_TOPIC_SLICE):
+                    yield FALLBACK_OFF_TOPIC_REPLY[i : i + _OFF_TOPIC_SLICE]
+
+            emit({"type": "route", "intent": "off_topic"})
+            return StreamPlan(
+                intent="off_topic",
+                token_iter=_decline(),
+                allow_citations=False,
+            )
+
         included = outcome.prompt.included_results if outcome.prompt else outcome.results
         return StreamPlan(
             intent="rag_query",
             token_iter=token_iter,
             sources=_results_to_cited(included),
             confidence=outcome.confidence,
-            abstained=self._rag._is_abstaining(outcome),
+            abstained=False,
             allow_citations=True,
         )
 
