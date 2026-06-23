@@ -321,15 +321,15 @@ export function Sidebar() {
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   return (
-    <aside className="w-56 shrink-0 flex flex-col h-full bg-surface/70 backdrop-blur-xl border-r border-white/5">
+    <aside className="w-56 shrink-0 flex flex-col h-full bg-surface/80 backdrop-blur-xl border-r border-teal/10">
       {/* Logo */}
-      <div className="h-12 flex items-center gap-2.5 px-4 border-b border-border shrink-0">
-        <div className="w-6 h-6 rounded bg-teal/10 border border-teal/30 flex items-center justify-center">
+      <div className="h-12 flex items-center gap-2.5 px-4 border-b border-teal/10 shrink-0">
+        <div className="w-6 h-6 rounded bg-teal/10 border border-teal/30 flex items-center justify-center shadow-teal">
           <Zap className="w-3.5 h-3.5 text-teal" strokeWidth={2.5} />
         </div>
-        <span className="font-display text-sm font-bold text-bright tracking-tight">DocuSage</span>
+        <span className="font-hud text-sm font-bold text-bright tracking-wider glow-text">DocuSage</span>
         <div className="ml-auto">
-          <div className="status-dot bg-green animate-pulse-teal" />
+          <div className="status-dot bg-green text-green animate-glow-pulse" />
         </div>
       </div>
 

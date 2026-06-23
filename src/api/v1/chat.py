@@ -128,10 +128,9 @@ def _get_orchestrator(
     RAGService + DocSummaryService. Patched wholesale in tests.
     """
     from src.configs.config import get_settings
-    from src.providers.llm.factory import get_router_llm_provider
+    from src.providers.llm.factory import get_router_llm_provider, get_summary_llm_provider
 
     _settings = get_settings()
-    llm = get_llm_provider()
     return ChatOrchestrator(
         analyzer=QuestionAnalyzer(
             # Small dedicated classifier model, not the 7B answer model.
@@ -141,7 +140,10 @@ def _get_orchestrator(
             llm_timeout_seconds=_settings.router_timeout_seconds,
         ),
         rag_service=rag_service,
-        summary_service=DocSummaryService(get_vector_store(), llm),
+        # Summaries run on a lighter model (see get_summary_llm_provider):
+        # the answer model is too memory/compute-heavy for whole-document
+        # map-reduce on CPU and was timing out.
+        summary_service=DocSummaryService(get_vector_store(), get_summary_llm_provider()),
         enable_router=_settings.enable_question_router,
     )
 
@@ -526,6 +528,11 @@ async def _sse_generator(
         abstained = plan.abstained if plan else True
         intent = plan.intent if plan else "rag_query"
 
+        # Source citations belong to grounded RAG answers only. Summaries
+        # (and off-topic replies) are not per-passage citable, so we neither
+        # persist nor surface sources for them — the UI shows no "sources".
+        display_sources = cited if intent == "rag_query" else []
+
         # ── Phase 3: Validate + persist ───────────────────────────
         yield _sse_event({"type": "thinking", "stage": "validating"})
         result = validate_answer(
@@ -541,7 +548,7 @@ async def _sse_generator(
         assistant_msg = await chat_service.save_assistant_message(
             chat_id=chat_id,
             content=result.answer,
-            sources=cited,
+            sources=display_sources,
         )
 
         if chat.message_count <= 2:
@@ -574,7 +581,7 @@ async def _sse_generator(
                 "confidence": round(confidence, 3),
             })
 
-        # ── Phase 5: Sources event (context-ordered) ──────────────
+        # ── Phase 5: Sources event (context-ordered; RAG only) ────
         yield _sse_event({
             "type": "sources",
             "sources": [
@@ -589,7 +596,7 @@ async def _sse_generator(
                     "char_end": s.char_end,
                     "text": s.text,
                 }
-                for s in cited
+                for s in display_sources
             ],
             "confidence": round(confidence, 3),
         })

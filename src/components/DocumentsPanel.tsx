@@ -251,9 +251,9 @@ export function DocumentsPanel({ onClose }: { onClose: () => void }) {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-border shrink-0">
-        <Database className="w-4 h-4 text-teal" />
-        <h2 className="font-display text-sm font-semibold text-bright flex-1">Document Library</h2>
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-teal/10 shrink-0">
+        <Database className="w-4 h-4 text-teal glow-text" />
+        <h2 className="font-hud text-sm font-semibold text-bright flex-1 tracking-wide glow-text">Document Library</h2>
 
         {/* Stats */}
         <div className="flex items-center gap-1 font-mono text-xs text-dim">

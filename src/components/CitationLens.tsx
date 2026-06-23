@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { ExternalLink } from 'lucide-react'
 import type { CitedSource } from '@/api'
 import { useSourcePanel } from '@/store/source-panel'
@@ -14,7 +15,8 @@ function LensThumbnail({ source }: { source: CitedSource }) {
     source.document_id,
     source.page && source.page >= 1 ? source.page : 1,
     source.chunk_id,
-    1, // thumbnail scale — small + fast
+    1.5,  // thumbnail scale — small + fast
+    true, // crop to just the cited passage
   )
 
   if (isError) return null
@@ -28,7 +30,7 @@ function LensThumbnail({ source }: { source: CitedSource }) {
     <img
       src={data.url}
       alt={`${source.source} — page ${source.page ?? 1}`}
-      className="w-full max-h-44 object-cover object-top mb-2 rounded border border-border/60"
+      className="w-full h-auto mb-2 rounded border border-teal/20"
     />
   )
 }
@@ -37,6 +39,9 @@ interface CitationLensProps {
   source: CitedSource
   query?: string
   children: React.ReactNode
+  /** Render the trigger as a full-width block (for source-list rows)
+   *  instead of an inline chip. */
+  block?: boolean
 }
 
 const STOP_WORDS = new Set([
@@ -85,10 +90,21 @@ export function highlightQueryTerms(text: string, query: string): React.ReactNod
   return parts
 }
 
-export function CitationLens({ source, query, children }: CitationLensProps) {
+// Anchored, viewport-clamped position for the portaled popover.
+interface PopoverPos {
+  left: number
+  width: number
+  top?: number
+  bottom?: number
+  maxHeight: number
+}
+
+export function CitationLens({ source, query, children, block = false }: CitationLensProps) {
   const openSource = useSourcePanel((s) => s.openSource)
   const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState<PopoverPos | null>(null)
   const wrapperRef = useRef<HTMLSpanElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
   const hoverTimerRef = useRef<number | null>(null)
 
   const cancelHoverClose = useCallback(() => {
@@ -100,13 +116,50 @@ export function CitationLens({ source, query, children }: CitationLensProps) {
 
   const scheduleClose = useCallback(() => {
     cancelHoverClose()
-    hoverTimerRef.current = window.setTimeout(() => setOpen(false), 120)
+    hoverTimerRef.current = window.setTimeout(() => setOpen(false), 140)
   }, [cancelHoverClose])
+
+  // Compute a fixed position from the chip's rect. Flips above the chip
+  // when there isn't enough room below, and clamps within the viewport.
+  const computePos = useCallback(() => {
+    const el = wrapperRef.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    const margin = 12
+    const width = Math.min(420, window.innerWidth - margin * 2)
+    let left = r.left
+    if (left + width > window.innerWidth - margin) left = window.innerWidth - margin - width
+    if (left < margin) left = margin
+
+    const spaceBelow = window.innerHeight - r.bottom - margin
+    const spaceAbove = r.top - margin
+    if (spaceBelow >= 240 || spaceBelow >= spaceAbove) {
+      setPos({ left, width, top: r.bottom + 6, maxHeight: spaceBelow })
+    } else {
+      setPos({ left, width, bottom: window.innerHeight - r.top + 6, maxHeight: spaceAbove })
+    }
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!open) return
+    computePos()
+    // capture-phase scroll catches scrolling inside any container, not just window
+    window.addEventListener('scroll', computePos, true)
+    window.addEventListener('resize', computePos)
+    return () => {
+      window.removeEventListener('scroll', computePos, true)
+      window.removeEventListener('resize', computePos)
+    }
+  }, [open, computePos])
 
   useEffect(() => {
     if (!open) return
     const onClick = (e: MouseEvent) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+      const t = e.target as Node
+      if (
+        wrapperRef.current && !wrapperRef.current.contains(t) &&
+        popoverRef.current && !popoverRef.current.contains(t)
+      ) {
         setOpen(false)
       }
     }
@@ -129,22 +182,34 @@ export function CitationLens({ source, query, children }: CitationLensProps) {
   return (
     <span
       ref={wrapperRef}
-      className="relative inline-block"
+      className={block ? 'relative block' : 'relative inline-block'}
       onMouseEnter={cancelHoverClose}
       onMouseLeave={scheduleClose}
     >
       <span
+        className={block ? 'block' : undefined}
         onMouseEnter={() => { cancelHoverClose(); setOpen(true) }}
         onClick={(e) => { e.stopPropagation(); setOpen(o => !o) }}
       >
         {children}
       </span>
 
-      {open && (
+      {open && pos && createPortal(
         <div
+          ref={popoverRef}
           role="dialog"
           aria-label={`Source ${source.source}, page ${source.page ?? '?'}`}
-          className="absolute z-50 left-0 top-full mt-1 w-[min(420px,calc(100vw-2rem))] bg-panel border border-border rounded-lg shadow-2xl p-3 animate-fade-up text-left cursor-default"
+          onMouseEnter={cancelHoverClose}
+          onMouseLeave={scheduleClose}
+          style={{
+            position: 'fixed',
+            left: pos.left,
+            width: pos.width,
+            top: pos.top,
+            bottom: pos.bottom,
+            maxHeight: pos.maxHeight,
+          }}
+          className="z-[100] overflow-y-auto bg-panel border border-teal/25 rounded-lg shadow-hud p-3 animate-fade-up text-left cursor-default"
         >
           {/* Header */}
           <div className="flex items-baseline gap-2 mb-2 pb-2 border-b border-border/60">
@@ -192,7 +257,8 @@ export function CitationLens({ source, query, children }: CitationLensProps) {
             Open in viewer
             <ExternalLink className="w-3 h-3" />
           </button>
-        </div>
+        </div>,
+        document.body,
       )}
     </span>
   )

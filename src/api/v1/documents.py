@@ -162,6 +162,7 @@ async def get_document_page_image(
     page: int = Query(..., ge=1, description="1-based page number"),
     chunk_id: str | None = Query(default=None, description="Chunk whose text to highlight"),
     scale: float = Query(default=2.0, ge=0.5, le=3.0),
+    crop: bool = Query(default=False, description="Clip to the highlighted passage instead of the full page"),
     current_user: User = Depends(get_current_user),
     service: DocumentService = Depends(_get_service),
 ) -> Response:
@@ -202,7 +203,7 @@ async def get_document_page_image(
     loop = asyncio.get_event_loop()
     try:
         rendered = await loop.run_in_executor(
-            None, render_pdf_page, pdf_bytes, page, highlight_text, scale
+            None, render_pdf_page, pdf_bytes, page, highlight_text, scale, crop
         )
     except ValueError as exc:
         raise HTTPException(

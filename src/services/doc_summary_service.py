@@ -28,6 +28,7 @@ Algorithm
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -87,6 +88,7 @@ class DocSummaryService:
         final_max_tokens: int | None = None,
         max_total_chunks: int | None = None,
         timeout_seconds: float | None = None,
+        map_concurrency: int | None = None,
     ) -> None:
         self._vector_store = vector_store
         self._llm = llm
@@ -98,6 +100,7 @@ class DocSummaryService:
         self._final_max_tokens = final_max_tokens or settings.summary_final_max_tokens
         self._max_total_chunks = max_total_chunks or settings.summary_max_total_chunks
         self._timeout = timeout_seconds or settings.summary_timeout_seconds
+        self._map_concurrency = max(1, map_concurrency or settings.summary_map_concurrency)
 
     async def prepare_summary_stream(
         self,
@@ -173,19 +176,10 @@ class DocSummaryService:
                 level=level,
                 segments=len(segments),
                 tokens=count_tokens(material),
+                concurrency=self._map_concurrency,
             )
-            bullets: list[str] = []
-            for segment in segments:
-                response = await self._llm.generate(
-                    [
-                        LLMMessage(role="system", content=_MAP_SYSTEM_PROMPT),
-                        LLMMessage(role="user", content=segment),
-                    ],
-                    LLMConfig(temperature=0.2, max_tokens=self._section_max_tokens),
-                    timeout=self._timeout,
-                )
-                bullets.append(response.content.strip())
-                outcome.map_calls += 1
+            bullets = await self._map_segments(segments)
+            outcome.map_calls += len(segments)
             material = "\n\n".join(bullets)
 
         if count_tokens(material) > self._context_budget:
@@ -229,6 +223,33 @@ class DocSummaryService:
                 ) from exc
 
         return outcome, _token_iter()
+
+    async def _map_segments(self, segments: list[str]) -> list[str]:
+        """
+        Summarize each segment into bullets — CONCURRENTLY.
+
+        The map phase is embarrassingly parallel (each part is summarized
+        independently), so we fire the calls together via asyncio.gather
+        instead of awaiting them one-by-one. A semaphore caps in-flight
+        requests at `map_concurrency` to stay within Ollama's parallel
+        slots / memory. Results keep input order (gather preserves it).
+        """
+        sem = asyncio.Semaphore(self._map_concurrency)
+        map_config = LLMConfig(temperature=0.2, max_tokens=self._section_max_tokens)
+
+        async def _one(segment: str) -> str:
+            async with sem:
+                response = await self._llm.generate(
+                    [
+                        LLMMessage(role="system", content=_MAP_SYSTEM_PROMPT),
+                        LLMMessage(role="user", content=segment),
+                    ],
+                    map_config,
+                    timeout=self._timeout,
+                )
+            return response.content.strip()
+
+        return list(await asyncio.gather(*(_one(s) for s in segments)))
 
 
 # ── Pure helpers ──────────────────────────────────────────────────

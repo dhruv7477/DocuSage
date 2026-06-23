@@ -62,6 +62,22 @@ def get_router_llm_provider() -> BaseLLMProvider:
     return _build_llm_provider(settings.router_model or settings.llm_model)
 
 
+@lru_cache(maxsize=1)
+def get_summary_llm_provider() -> BaseLLMProvider:
+    """
+    Model for document summarization (bulk map-reduce over whole docs).
+
+    Defaults to the lightweight router_model: summarization is high-volume
+    work where a smaller, faster model is the right trade-off — especially
+    on CPU/RAM-constrained hosts, where the full answer model's larger
+    memory footprint and slower prefill cause timeouts. Override via
+    SUMMARY_MODEL to use a bigger model when compute allows.
+    """
+    settings = get_settings()
+    model = settings.summary_model or settings.router_model or settings.llm_model
+    return _build_llm_provider(model)
+
+
 def _build_llm_provider(model: str) -> BaseLLMProvider:
     """Construct a provider for the active backend pinned to `model`."""
     settings = get_settings()
@@ -104,3 +120,4 @@ def reset_llm_provider() -> None:
     """Clear the cached providers. Used in tests to swap providers."""
     get_llm_provider.cache_clear()
     get_router_llm_provider.cache_clear()
+    get_summary_llm_provider.cache_clear()

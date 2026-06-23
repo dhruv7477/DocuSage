@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { Send, Bot, User, Loader2, Sparkles, ChevronDown, AlertTriangle, Info, X } from 'lucide-react'
+import { Send, Bot, User, Loader2, Sparkles, ChevronDown, AlertTriangle, Info, X, Maximize2, Eye } from 'lucide-react'
 import { clsx } from 'clsx'
 import { formatDistanceToNow } from 'date-fns'
 import {
@@ -13,17 +13,23 @@ import {
 } from '@/api'
 import { useApp } from '@/store/app'
 import { useSSE, type StreamWarning } from '@/hooks/useSSE'
+import { useSourcePanel } from '@/store/source-panel'
+import { usePageImage } from '@/hooks/usePageImage'
 import { CitationLens } from './CitationLens'
 import { SourcePanel } from './SourcePanel'
 import { ThinkingStatus } from './ThinkingStatus'
 import { MessagesSkeleton } from './Skeletons'
+
+function isPdf(filename: string): boolean {
+  return /\.pdf$/i.test(filename)
+}
 
 // ── Typewriter-style streaming cursor ────────────────────────────
 function StreamingContent({ content }: { content: string }) {
   return (
     <span>
       {content}
-      <span className="inline-block w-0.5 h-3.5 bg-teal ml-0.5 align-middle animate-blink" />
+      <span className="inline-block w-0.5 h-3.5 bg-teal ml-0.5 align-middle animate-blink shadow-teal" />
     </span>
   )
 }
@@ -65,99 +71,147 @@ function WarningBanner({ warning }: { warning: StreamWarning }) {
   )
 }
 
-// ── Citation chip + helpers ───────────────────────────────────────
+// ── Citation helpers ──────────────────────────────────────────────
 
-// Highlight-and-scroll a source badge when its [n] chip is clicked.
-function focusSource(messageId: string, index: number) {
-  if (typeof document === 'undefined') return
-  const el = document.getElementById(`source-${messageId}-${index}`)
-  if (!el) return
-  el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  el.classList.add('ring-2', 'ring-teal/60')
-  window.setTimeout(() => el.classList.remove('ring-2', 'ring-teal/60'), 1400)
+// Citations live in the "Check sources" carousel, not inline. Strip the
+// [n] markers from the answer text (and tidy the spacing/punctuation they
+// leave behind). The trailing-partial rule keeps a half-streamed "[1"
+// from flickering while tokens arrive.
+function stripCitations(content: string): string {
+  return content
+    .replace(/\[\d+\]/g, '')
+    .replace(/\[\d*$/, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\s+([.,;:!?])/g, '$1')
 }
 
-// Split assistant text on [n] / [n][m] markers and render each marker as
-// a clickable chip. Out-of-range markers (no matching source) render as
-// dim text — better than a broken link.
-function renderWithCitations(
-  content: string,
-  sources: CitedSource[],
-  messageId: string,
-  userQuery?: string,
-) {
-  if (!sources.length) return <>{content}</>
+// ── Inline page-screenshot preview (issue #1: prominent, always-visible) ──
+// Renders the cited PDF page with the passage highlighted, directly under
+// the source badge. Clicking it opens the full magnifier (SourcePanel).
+function SourcePreview({ source }: { source: CitedSource }) {
+  const openSource = useSourcePanel((s) => s.openSource)
+  const pageNum = source.page && source.page >= 1 ? source.page : 1
+  // crop=true → just the highlighted paragraph, not the whole page.
+  const { data, isLoading, isError } = usePageImage(source.document_id, pageNum, source.chunk_id, 2, true)
 
-  const parts: (string | { idx: number })[] = []
-  const re = /\[(\d+)\]/g
-  let lastEnd = 0
-  let match: RegExpExecArray | null
-  while ((match = re.exec(content)) !== null) {
-    if (match.index > lastEnd) parts.push(content.slice(lastEnd, match.index))
-    parts.push({ idx: parseInt(match[1], 10) - 1 })
-    lastEnd = match.index + match[0].length
+  if (isError) return null
+  if (isLoading) {
+    return <div className="mt-2 w-full h-24 rounded-md bg-teal/[0.03] border border-teal/10 animate-pulse" />
   }
-  if (lastEnd < content.length) parts.push(content.slice(lastEnd))
+  if (!data) return null
 
   return (
-    <>
-      {parts.map((p, i) => {
-        if (typeof p === 'string') return <span key={i}>{p}</span>
-        const isValid = p.idx >= 0 && p.idx < sources.length
-        if (!isValid) {
-          return <span key={i} className="font-mono text-dim">[{p.idx + 1}]</span>
-        }
-        const chip = (
-          <button
-            onClick={() => focusSource(messageId, p.idx)}
-            className="inline-flex align-middle items-center font-mono text-2xs font-bold text-teal/90 bg-teal/8 hover:bg-teal/15 hover:text-teal border border-teal/20 hover:border-teal/40 rounded px-1 mx-0.5 transition-colors"
-            title={`Source ${p.idx + 1}: ${sources[p.idx].source}`}
-          >
-            [{p.idx + 1}]
-          </button>
-        )
-        return (
-          <CitationLens key={i} source={sources[p.idx]} query={userQuery}>
-            {chip}
-          </CitationLens>
-        )
-      })}
-    </>
+    <button
+      onClick={() => openSource(source)}
+      className="group/preview relative mt-2 block w-full overflow-hidden rounded-md border border-teal/15 hover:border-teal/45 transition-all hover:shadow-teal"
+      title="Click to open the full page"
+    >
+      <img
+        src={data.url}
+        alt={`${source.source} — cited passage on page ${pageNum}`}
+        className="w-full h-auto"
+        loading="lazy"
+      />
+      {!data.highlightFound && (
+        <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-void/80 border border-amber/30 text-amber/90 font-mono text-2xs">
+          full page
+        </span>
+      )}
+      {/* Magnify affordance */}
+      <span className="absolute inset-0 bg-gradient-to-t from-void/80 via-transparent to-transparent opacity-0 group-hover/preview:opacity-100 transition-opacity" />
+      <span className="absolute bottom-2 right-2 flex items-center gap-1 px-2 py-1 rounded bg-void/85 border border-teal/40 text-teal font-mono text-2xs opacity-0 group-hover/preview:opacity-100 transition-opacity">
+        <Maximize2 className="w-3 h-3" /> open page
+      </span>
+    </button>
   )
 }
 
-// ── Source citation badge ─────────────────────────────────────────
-function SourceBadge({
+// ── Source carousel card ──────────────────────────────────────────
+// `rank` is the 1-based similarity position. `showPreview` renders the
+// cropped paragraph screenshot (reserved for the top source(s)). Hover or
+// click reveals the full passage via the CitationLens popover.
+function SourceCard({
   source,
-  index,
-  messageId,
+  rank,
+  showPreview,
+  query,
 }: {
   source: CitedSource
-  index: number
-  messageId: string
+  rank: number
+  showPreview: boolean
+  query?: string
 }) {
   const heading = source.heading_path && source.heading_path.length
     ? source.heading_path.join(' > ')
     : null
   return (
-    <div
-      id={`source-${messageId}-${index}`}
-      className="flex flex-col gap-1 px-3 py-2 bg-surface border border-border rounded-lg text-xs group hover:border-teal/30 transition-all cursor-default"
-    >
-      <div className="flex items-center gap-2">
-        <span className="font-mono text-teal/80 font-bold">[{index + 1}]</span>
-        <span className="text-ghost truncate flex-1">{source.source}</span>
-        {source.page != null && (
-          <span className="text-dim font-mono">p.{source.page}</span>
-        )}
-        <span className="text-dim font-mono ml-auto">
-          {(source.score * 100).toFixed(0)}%
+    <div className="snap-start shrink-0 w-60">
+      <CitationLens source={source} query={query} block>
+        <div className="h-full hud-panel rounded-lg p-2.5 cursor-pointer hover:border-teal/40 hover:shadow-teal transition-all group">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="font-mono text-teal font-bold glow-text shrink-0">#{rank}</span>
+            <span className="text-subtle truncate flex-1" title={source.source}>{source.source}</span>
+            <Eye className="w-3.5 h-3.5 text-dim group-hover:text-teal transition-colors shrink-0" />
+          </div>
+          <div className="flex items-center gap-2 mt-0.5 font-mono text-2xs text-dim">
+            {source.page != null && <span>p.{source.page}</span>}
+            <span className="ml-auto text-teal/70">{(source.score * 100).toFixed(0)}% match</span>
+          </div>
+          {heading && (
+            <p className="font-mono text-2xs text-dim truncate mt-1" title={heading}>{heading}</p>
+          )}
+          {showPreview && isPdf(source.source) && <SourcePreview source={source} />}
+        </div>
+      </CitationLens>
+    </div>
+  )
+}
+
+// ── Collapsible source carousel ───────────────────────────────────
+// Hidden behind a "Check sources" toggle. We keep ONLY the most relevant
+// source(s) by similarity (desc): a single source document → top 2;
+// multiple documents → just the single highest-similarity passage. Every
+// kept card shows its cropped paragraph screenshot.
+function SourcesDisclosure({
+  sources,
+  query,
+}: {
+  sources: CitedSource[]
+  query?: string
+}) {
+  const [open, setOpen] = useState(false)
+  if (!sources.length) return null
+
+  const ranked = [...sources].sort((a, b) => b.score - a.score)
+  const distinctDocs = new Set(sources.map((s) => s.document_id)).size
+  const keepCount = distinctDocs === 1 ? 2 : 1
+  const kept = ranked.slice(0, keepCount)
+
+  return (
+    <div className="mt-2 w-full min-w-0">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hud-panel font-mono text-2xs uppercase tracking-widest text-teal/80 hover:text-teal hover:border-teal/40 hover:shadow-teal transition-all"
+      >
+        <ChevronDown className={clsx('w-3.5 h-3.5 transition-transform', open && 'rotate-180')} />
+        Check {kept.length === 1 ? 'source' : 'sources'}
+        <span className="px-1.5 py-0.5 rounded-full bg-teal/10 border border-teal/25 text-teal">
+          {kept.length}
         </span>
-      </div>
-      {heading && (
-        <p className="font-mono text-2xs text-dim truncate pl-6" title={heading}>
-          {heading}
-        </p>
+      </button>
+      {open && (
+        <div className="mt-1.5 flex gap-2 overflow-x-auto pb-2 snap-x snap-mandatory animate-fade-up">
+          {kept.map((s, rank) => (
+            <SourceCard
+              key={`${s.document_id}-${s.chunk_id ?? rank}`}
+              source={s}
+              rank={rank + 1}
+              showPreview
+              query={query}
+            />
+          ))}
+        </div>
       )}
     </div>
   )
@@ -166,7 +220,7 @@ function SourceBadge({
 // ── Message bubble ────────────────────────────────────────────────
 function MessageBubble({ msg, userQuery }: { msg: Message; userQuery?: string }) {
   const isUser = msg.role === 'user'
-  const sources: CitedSource[] = msg.sources_json ?? []
+  const sources: CitedSource[] = msg.sources ?? []
 
   return (
     <motion.div
@@ -179,35 +233,28 @@ function MessageBubble({ msg, userQuery }: { msg: Message; userQuery?: string })
       <div className={clsx(
         'w-7 h-7 rounded-lg flex items-center justify-center shrink-0 mt-0.5',
         isUser
-          ? 'bg-amber/10 border border-amber/20'
-          : 'bg-teal/10 border border-teal/20'
+          ? 'bg-plasma/10 border border-plasma/30'
+          : 'bg-teal/10 border border-teal/30 shadow-teal'
       )}>
         {isUser
-          ? <User className="w-3.5 h-3.5 text-amber" />
+          ? <User className="w-3.5 h-3.5 text-plasma" />
           : <Bot className="w-3.5 h-3.5 text-teal" />
         }
       </div>
 
-      <div className={clsx('flex-1 max-w-2xl', isUser && 'flex flex-col items-end')}>
+      <div className={clsx('flex-1 min-w-0 max-w-2xl', isUser && 'flex flex-col items-end')}>
         {/* Content */}
         <div className={clsx(
-          'rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap',
+          'rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words',
           isUser
-            ? 'bg-amber/8 border border-amber/15 text-base'
-            : 'bg-panel border border-border text-base'
+            ? 'bg-plasma/[0.07] border border-plasma/25 text-bright'
+            : 'hud-panel text-bright'
         )}>
-          {isUser ? msg.content : renderWithCitations(msg.content, sources, msg.id, userQuery)}
+          {isUser ? msg.content : stripCitations(msg.content)}
         </div>
 
-        {/* Sources */}
-        {sources.length > 0 && (
-          <div className="mt-2 w-full space-y-1">
-            <p className="font-mono text-2xs text-dim uppercase tracking-widest px-1 mb-1.5">Sources</p>
-            {sources.map((s, i) => (
-              <SourceBadge key={i} source={s} index={i} messageId={msg.id} />
-            ))}
-          </div>
-        )}
+        {/* Sources (collapsed dropdown; RAG answers only) */}
+        {sources.length > 0 && <SourcesDisclosure sources={sources} query={userQuery} />}
 
         {/* Timestamp */}
         <p className="mt-1 font-mono text-2xs text-dim px-1">
@@ -230,23 +277,23 @@ function EmptyChat({ onSend }: { onSend: (q: string) => void }) {
   return (
     <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
       <div className="relative mb-6">
-        <div className="w-16 h-16 rounded-2xl bg-teal/5 border border-teal/20 flex items-center justify-center">
-          <Sparkles className="w-7 h-7 text-teal" />
+        <div className="w-16 h-16 rounded-2xl bg-teal/5 border border-teal/25 flex items-center justify-center shadow-teal hud-corners relative">
+          <Sparkles className="w-7 h-7 text-teal glow-text" />
         </div>
-        <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-green border-2 border-void" />
+        <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-green border-2 border-void animate-glow-pulse" />
       </div>
-      <h2 className="font-display text-xl font-semibold text-bright mb-2">
-        Ask about your documents
+      <h2 className="font-hud text-xl font-semibold text-bright mb-2 tracking-wide glow-text">
+        Query your documents
       </h2>
       <p className="text-sm text-subtle max-w-xs mb-8">
-        The AI has read your workspace documents and is ready to answer questions with citations.
+        The assistant has scanned your workspace and is ready to answer with cited, source-grounded intelligence.
       </p>
       <div className="grid grid-cols-1 gap-2 w-full max-w-md">
         {starters.map((q) => (
           <button
             key={q}
             onClick={() => onSend(q)}
-            className="text-left px-4 py-3 text-xs text-subtle border border-border rounded-lg hover:border-teal/30 hover:text-base hover:bg-teal/[0.03] transition-all"
+            className="text-left px-4 py-3 text-xs text-subtle hud-panel rounded-lg hover:border-teal/40 hover:text-bright hover:shadow-teal transition-all"
           >
             {q}
           </button>
@@ -370,7 +417,7 @@ export function ChatView() {
       role: 'user',
       content: q,
       token_count: null,
-      sources_json: null,
+      sources: [],
       created_at: new Date().toISOString(),
     }
     qc.setQueryData<Message[]>(['messages', activeChatId], (old = []) => [...old, tempMsg])
@@ -412,7 +459,7 @@ export function ChatView() {
         ) : messages.filter(m => m.id !== '__temp__').length === 0 && !sse.streaming ? (
           <EmptyChat onSend={sendMessage} />
         ) : (
-          <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
+          <div className="max-w-3xl mx-auto px-3 sm:px-4 py-6 pt-14 space-y-6">
             {(() => {
               const visible = messages.filter(m => m.role !== 'system')
               return visible.map((msg, idx) => {
@@ -432,13 +479,13 @@ export function ChatView() {
             {/* Streaming response */}
             {sse.streaming && (
               <div className="flex gap-3 animate-fade-up">
-                <div className="w-7 h-7 rounded-lg bg-teal/10 border border-teal/20 flex items-center justify-center shrink-0 mt-0.5 animate-pulse-teal">
+                <div className="w-7 h-7 rounded-lg bg-teal/10 border border-teal/30 flex items-center justify-center shrink-0 mt-0.5 animate-pulse-teal">
                   <Bot className="w-3.5 h-3.5 text-teal" />
                 </div>
-                <div className="flex-1 max-w-2xl">
-                  <div className="rounded-xl px-4 py-3 text-sm leading-relaxed bg-panel border border-teal/20">
+                <div className="flex-1 min-w-0 max-w-2xl">
+                  <div className="rounded-xl px-4 py-3 text-sm leading-relaxed hud-panel break-words">
                     {sse.content
-                      ? <StreamingContent content={sse.content} />
+                      ? <StreamingContent content={stripCitations(sse.content)} />
                       : <ThinkingStatus stage={sse.stage} startedAt={sse.startedAt} />
                     }
                     {/* Post-generation validation runs after the last token —
@@ -467,11 +514,8 @@ export function ChatView() {
 
             {/* Sources after streaming (before the persisted message arrives) */}
             {!sse.streaming && sse.sources.length > 0 && (
-              <div className="space-y-1 pl-10">
-                <p className="font-mono text-2xs text-dim uppercase tracking-widest mb-1.5">Sources</p>
-                {sse.sources.map((s, i) => (
-                  <SourceBadge key={i} source={s} index={i} messageId="streaming" />
-                ))}
+              <div className="pl-10">
+                <SourcesDisclosure sources={sse.sources} />
               </div>
             )}
           </div>
@@ -482,7 +526,8 @@ export function ChatView() {
       {!atBottom && (
         <button
           onClick={() => scrollToBottom('smooth')}
-          className="absolute bottom-24 right-8 w-8 h-8 rounded-full bg-panel border border-border text-subtle hover:text-base shadow-panel flex items-center justify-center z-10 transition-colors"
+          aria-label="Scroll to latest"
+          className="absolute bottom-28 right-4 sm:right-8 w-8 h-8 rounded-full hud-panel text-subtle hover:text-teal hover:shadow-teal flex items-center justify-center z-10 transition-all"
         >
           <ChevronDown className="w-4 h-4" />
         </button>
@@ -495,12 +540,12 @@ export function ChatView() {
         </div>
       )}
 
-      {/* Input area */}
-      <div className="shrink-0 border-t border-white/5 bg-surface/60 backdrop-blur-xl px-4 py-3">
+      {/* Input area — HUD console */}
+      <div className="shrink-0 border-t border-teal/10 bg-surface/60 backdrop-blur-xl px-3 sm:px-4 py-3">
         <div className="max-w-3xl mx-auto">
           <div className={clsx(
-            'flex items-end gap-2 bg-panel rounded-xl border transition-all',
-            sse.streaming ? 'border-teal/20' : 'border-border focus-within:border-teal/40',
+            'relative flex items-end gap-2 hud-panel hud-corners rounded-xl transition-all',
+            sse.streaming ? 'border-teal/30 shadow-teal' : 'focus-within:border-teal/50 focus-within:shadow-teal',
             !hasReadyDoc && 'opacity-60'
           )}>
             <textarea
@@ -524,13 +569,14 @@ export function ChatView() {
               }
               disabled={composerDisabled}
               rows={1}
-              className="flex-1 bg-transparent resize-none text-sm text-base placeholder:text-dim p-3 outline-none max-h-40 leading-relaxed disabled:cursor-not-allowed"
+              className="flex-1 min-w-0 bg-transparent resize-none text-sm text-bright placeholder:text-dim p-3 outline-none max-h-40 leading-relaxed disabled:cursor-not-allowed"
             />
             <button
               onClick={() => sendMessage()}
               disabled={!input.trim() || composerDisabled}
+              aria-label="Send message"
               className={clsx(
-                'mb-2.5 mr-2.5 w-8 h-8 rounded-lg flex items-center justify-center transition-all',
+                'mb-2.5 mr-2.5 w-8 h-8 rounded-lg flex items-center justify-center transition-all shrink-0',
                 input.trim() && !composerDisabled
                   ? 'bg-teal text-void hover:bg-teal/90 shadow-teal'
                   : 'bg-surface text-dim cursor-not-allowed'
@@ -559,7 +605,7 @@ export function ChatView() {
 // ── No chat selected placeholder ──────────────────────────────────
 function MessageSquarePlaceholder() {
   return (
-    <div className="w-16 h-16 rounded-2xl bg-surface border border-border flex items-center justify-center mx-auto">
+    <div className="w-16 h-16 rounded-2xl hud-panel hud-corners flex items-center justify-center mx-auto">
       <Bot className="w-7 h-7 text-dim" />
     </div>
   )

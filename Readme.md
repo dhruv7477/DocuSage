@@ -280,11 +280,13 @@ You can also open the Documents panel at any time using the floating **Documents
 | `POSTGRES_USER` | No | `docusage_user` | Database user |
 | `POSTGRES_HOST` | No | `localhost` | Database host |
 | `LLM_PROVIDER` | No | `ollama` | `ollama` · `openai` · `anthropic` · `vllm` |
-| `LLM_MODEL` | No | `llama3.3:70b` | Model name for the chosen provider |
+| `LLM_MODEL` | No | `qwen2.5:7b-instruct` | Answer model for the chosen provider |
+| `ROUTER_MODEL` | No | `qwen2.5:1.5b-instruct` | Small model for the intent router (Question Analyzer) |
 | `OPENAI_API_KEY` | If OpenAI | — | `sk-...` |
 | `ANTHROPIC_API_KEY` | If Anthropic | — | `sk-ant-...` |
 | `EMBEDDING_PROVIDER` | No | `bge` | `bge` · `openai` · `ollama` |
-| `EMBEDDING_MODEL` | No | `BAAI/bge-m3` | Embedding model name |
+| `EMBEDDING_MODEL` | No | `BAAI/bge-small-en-v1.5` | Embedding model name |
+| `EMBEDDING_DIMENSION` | No | `384` | Must match the embedding model (384 for bge-small, 1024 for bge-m3) |
 | `EMBEDDING_DEVICE` | No | `cpu` | `cpu` · `cuda` · `mps` |
 | `STORAGE_BACKEND` | No | `minio` | `minio` · `s3` |
 | `MINIO_ENDPOINT` | No | `localhost:9000` | MinIO address |
@@ -342,7 +344,7 @@ DocuSage/
 │   ├── core/                 # JWT, audit logging, rate limiting, exceptions
 │   ├── ingestion/            # Document parsing and chunking pipeline
 │   ├── providers/            # Pluggable LLM and embedding backends
-│   ├── retrieval/            # Query rewriting, reranking, BM25 hybrid search
+│   ├── retrieval/            # Query rewriting/HyDE, dense+sparse hybrid (RRF), cross-encoder rerank
 │   ├── vector_store/         # Qdrant client
 │   ├── workers/              # Celery document processing tasks
 │   ├── db/                   # Session factory and Alembic migrations
@@ -374,7 +376,7 @@ The backend is not running. Start uvicorn (Option B) or `docker compose up` (Opt
 Database migrations have not been run. Execute `alembic upgrade head`.
 
 **Embedding model downloads on first startup**
-This is expected. The ~2 GB BGE-M3 model is downloaded once and cached. Subsequent starts load from the local cache in ~30 seconds.
+This is expected. The default BGE-small model (~133 MB) is downloaded once and cached; subsequent starts load from the local cache in a few seconds. (The opt-in BGE-M3 model is ~2 GB and takes longer.)
 
 **Documents stuck on "Indexing"**
 The Celery worker is not running. In a separate terminal (with venv active): `celery -A src.workers.celery_app worker --loglevel=info`
@@ -386,4 +388,4 @@ Either no documents have been uploaded, or they are still indexing (status not y
 One of the required ports (5432, 6333, 6379, 8000, 9000) is taken by another process. Either stop that process or change the port mapping in `docker/docker-compose.yml`.
 
 **Out of memory during embedding**
-The BGE-M3 model uses ~2 GB of RAM. If you're on a constrained machine, switch to a lighter model: set `EMBEDDING_MODEL=BAAI/bge-base-en-v1.5` and `EMBEDDING_DIMENSION=768` in `.env`.
+The opt-in BGE-M3 model uses ~2 GB of RAM. The default `BAAI/bge-small-en-v1.5` (`EMBEDDING_DIMENSION=384`) is already the lightest option; on a very constrained machine, stay on it rather than switching to a larger model.

@@ -12,32 +12,37 @@ import { Input } from '@/components/ui/Input'
 // ── Shared bg decoration ──────────────────────────────────────────
 function AuthShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="relative min-h-screen bg-void overflow-hidden flex items-center justify-center">
-      {/* Grid */}
-      <div className="absolute inset-0 bg-grid opacity-100" />
+    <div className="relative min-h-[100dvh] bg-void overflow-hidden flex items-center justify-center">
+      {/* Scrolling alignment grid */}
+      <div className="absolute inset-0 bg-grid motion-safe:animate-grid-scroll opacity-70" />
 
-      {/* Radial glow */}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_60%_50%_at_50%_-10%,rgba(0,212,200,0.08),transparent)]" />
+      {/* Radial glow + depth */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_60%_50%_at_50%_-10%,rgba(31,240,230,0.10),transparent)]" />
+      <div className="absolute -bottom-1/3 -left-1/4 w-[60vw] h-[60vh] rounded-full bg-[radial-gradient(circle,rgba(157,107,255,0.06),transparent_60%)] blur-3xl motion-safe:animate-aurora-slow pointer-events-none" />
+
+      {/* CRT scanlines + drifting sweep */}
+      <div className="absolute inset-0 bg-scanlines opacity-50 mix-blend-screen pointer-events-none" />
+      <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-teal/[0.07] to-transparent pointer-events-none motion-safe:animate-scanline" />
 
       {/* Corner accents */}
-      <div className="absolute top-0 left-0 w-48 h-48 border-l border-t border-teal/10" />
-      <div className="absolute bottom-0 right-0 w-48 h-48 border-r border-b border-teal/10" />
+      <div className="absolute top-0 left-0 w-48 h-48 border-l border-t border-teal/15" />
+      <div className="absolute bottom-0 right-0 w-48 h-48 border-r border-b border-teal/15" />
 
-      {/* Diagonal stripe */}
-      <div className="absolute -top-32 -right-32 w-96 h-96 bg-teal/[0.03] rotate-45" />
+      {/* Vignette */}
+      <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(ellipse_at_center,transparent_55%,rgba(0,0,0,0.55))]" />
 
       {/* Logo */}
-      <div className="absolute top-8 left-8 flex items-center gap-2.5">
-        <div className="w-7 h-7 rounded bg-teal/10 border border-teal/30 flex items-center justify-center">
+      <div className="absolute top-6 sm:top-8 left-6 sm:left-8 flex items-center gap-2.5">
+        <div className="w-7 h-7 rounded bg-teal/10 border border-teal/30 flex items-center justify-center shadow-teal">
           <Zap className="w-4 h-4 text-teal" strokeWidth={2.5} />
         </div>
-        <span className="font-display text-base font-semibold text-bright tracking-tight">
+        <span className="font-hud text-base font-semibold text-bright tracking-wider glow-text">
           DocuSage
         </span>
       </div>
 
       {/* Version badge */}
-      <div className="absolute top-8 right-8 font-mono text-2xs text-dim border border-border px-2 py-1 rounded">
+      <div className="absolute top-6 sm:top-8 right-6 sm:right-8 font-mono text-2xs text-teal/70 border border-teal/20 px-2 py-1 rounded">
         v1.0
       </div>
 
@@ -93,7 +98,7 @@ export function LoginPage() {
           <p className="font-mono text-xs text-teal mb-2 tracking-widest uppercase">
             // AUTHENTICATE
           </p>
-          <h1 className="font-display text-3xl font-bold text-bright leading-tight">
+          <h1 className="font-hud text-3xl font-bold text-bright leading-tight tracking-wide glow-text">
             Welcome back
           </h1>
           <p className="mt-2 text-sm text-subtle">
@@ -102,7 +107,7 @@ export function LoginPage() {
         </div>
 
         {/* Form */}
-        <div className="bg-panel border border-border rounded-xl p-6 shadow-panel space-y-4">
+        <div className="relative hud-panel hud-corners rounded-xl p-6 shadow-hud space-y-4">
           <Input
             label="Email"
             type="email"
@@ -201,7 +206,7 @@ export function RegisterPage() {
           <p className="font-mono text-xs text-teal mb-2 tracking-widest uppercase">
             // NEW_INSTANCE
           </p>
-          <h1 className="font-display text-3xl font-bold text-bright">
+          <h1 className="font-hud text-3xl font-bold text-bright tracking-wide glow-text">
             Create account
           </h1>
           <p className="mt-2 text-sm text-subtle">
@@ -209,7 +214,7 @@ export function RegisterPage() {
           </p>
         </div>
 
-        <div className="bg-panel border border-border rounded-xl p-6 shadow-panel space-y-4">
+        <div className="relative hud-panel hud-corners rounded-xl p-6 shadow-hud space-y-4">
           <Input
             label="Full Name"
             placeholder="Ada Lovelace"

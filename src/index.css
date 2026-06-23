@@ -1,3 +1,88 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    background: #04070f;
+    color: #e3f1ff;
+  }
+
+  ::selection {
+    background: rgba(31, 240, 230, 0.28);
+    color: #e3f1ff;
+  }
+
+  /* Thin HUD scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(31, 240, 230, 0.25) transparent;
+  }
+  *::-webkit-scrollbar { width: 8px; height: 8px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb {
+    background: rgba(31, 240, 230, 0.18);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(31, 240, 230, 0.4);
+    background-clip: content-box;
+  }
+}
+
+@layer components {
+  /* Live status indicator dot (was previously undefined). */
+  .status-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 9999px;
+    box-shadow: 0 0 8px currentColor;
+  }
+
+  /* Holographic panel: faint cyan inner glow + hairline border. */
+  .hud-panel {
+    position: relative;
+    background:
+      linear-gradient(180deg, rgba(31, 240, 230, 0.02), transparent),
+      rgba(10, 19, 34, 0.72);
+    border: 1px solid rgba(31, 240, 230, 0.14);
+    backdrop-filter: blur(14px);
+  }
+
+  /* Animated corner brackets — the classic HUD frame. Applied to a
+     positioned (relative) element; draws four L-shaped corners. */
+  .hud-corners::before,
+  .hud-corners::after {
+    content: '';
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-color: rgba(31, 240, 230, 0.55);
+    pointer-events: none;
+  }
+  .hud-corners::before {
+    top: -1px; left: -1px;
+    border-top: 1.5px solid; border-left: 1.5px solid;
+  }
+  .hud-corners::after {
+    bottom: -1px; right: -1px;
+    border-bottom: 1.5px solid; border-right: 1.5px solid;
+  }
+
+  /* Soft neon text glow for headings / accents. */
+  .glow-text {
+    text-shadow: 0 0 12px rgba(31, 240, 230, 0.55), 0 0 2px rgba(31, 240, 230, 0.8);
+  }
+  .glow-text-plasma {
+    text-shadow: 0 0 12px rgba(157, 107, 255, 0.6);
+  }
+}

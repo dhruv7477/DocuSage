@@ -189,14 +189,30 @@ class Settings(BaseSettings):
     rag_context_tokens: int = 2500
     rag_history_tokens: int = 1000
     # DocSummaryService (map-reduce over a document's chunks).
-    # Material up to this many tokens is summarized in ONE streamed pass
-    # (no map phase). Most real documents fit, so the common case is a
-    # single LLM call instead of N sequential map calls — far faster on a
-    # CPU model. Larger docs are map-reduced down to this budget first.
-    summary_context_token_budget: int = 6000
-    # Per-segment input budget during the map phase (large docs only).
-    # Bigger segments → fewer map calls → less total decode on CPU.
-    summary_map_token_budget: int = 3000
+    # Material up to this many tokens is summarized in ONE streamed pass;
+    # larger docs are split into window-sized parts and map-reduced. Both
+    # budgets are kept under the model context window (Ollama defaults to
+    # num_ctx=4096) minus room for the prompt + generated tokens, so no
+    # call silently truncates. Bigger docs split into more parts, but the
+    # map phase runs those calls CONCURRENTLY (see summary_map_concurrency),
+    # so wall-clock time stays bounded regardless of part count.
+    summary_context_token_budget: int = 3200
+    # Per-part input budget during the (parallel) map phase.
+    summary_map_token_budget: int = 3200
+    # Max in-flight map calls (asyncio.gather is bounded by this).
+    # Default 1 = sequential, which is correct for CPU inference: parallel
+    # LLM calls don't reduce wall-clock on a single CPU (the cores are
+    # shared, so N concurrent calls each run ~Nx slower and tend to hit the
+    # per-call timeout together). Raise this ONLY on a GPU / multi-slot
+    # backend with spare compute, and set OLLAMA_NUM_PARALLEL >= this value.
+    summary_map_concurrency: int = 1
+    # Model used for summarization (bulk map-reduce over whole documents).
+    # Empty → fall back to the lightweight router_model: summaries are
+    # high-volume, low-precision work, and on a CPU/RAM-constrained box a
+    # smaller model is far faster and uses much less memory than the answer
+    # model. Set to llm_model (or any model) for higher-quality summaries
+    # when you have the compute.
+    summary_model: str = ""
     summary_section_max_tokens: int = 350
     summary_final_max_tokens: int = 700
     summary_max_total_chunks: int = 500

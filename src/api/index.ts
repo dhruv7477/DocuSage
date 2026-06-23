@@ -88,7 +88,9 @@ export interface Message {
   role: 'user' | 'assistant' | 'system'
   content: string
   token_count: number | null
-  sources_json: CitedSource[] | null
+  /** Citations backing an assistant message. The API serializes this as
+   *  `sources` (matching QueryResponse + the SSE `sources` event). */
+  sources?: CitedSource[]
   created_at: string
 }
 
@@ -181,10 +183,11 @@ export const documents = {
   file: (id: string) =>
     api.get<ArrayBuffer>(`/documents/${id}/file`, { responseType: 'arraybuffer' }),
 
-  /** Server-rendered PNG of one PDF page with the cited chunk highlighted. */
-  pageImage: (id: string, page: number, chunkId?: string, scale = 2) =>
+  /** Server-rendered PNG of one PDF page with the cited chunk highlighted.
+   *  `crop` clips the image to just the highlighted passage. */
+  pageImage: (id: string, page: number, chunkId?: string, scale = 2, crop = false) =>
     api.get<Blob>(`/documents/${id}/page-image`, {
-      params: { page, ...(chunkId ? { chunk_id: chunkId } : {}), scale },
+      params: { page, ...(chunkId ? { chunk_id: chunkId } : {}), scale, ...(crop ? { crop: true } : {}) },
       responseType: 'blob',
     }),
 
