@@ -59,7 +59,8 @@ docker compose --env-file .env -f docker/docker-compose.yml exec ollama ollama p
 
 python -m venv .venv
 source .venv/bin/activate            # Windows PowerShell: .venv\Scripts\Activate.ps1
-pip install -r requirements-dev.txt -c constraints.txt
+pip install "torch==2.15.0" --index-url https://download.pytorch.org/whl/cpu   # CPU build, no CUDA download
+pip install -r requirements-dev.txt  # pinned by constraints.txt
 alembic upgrade head
 
 npm ci
@@ -97,13 +98,15 @@ All settings live in `src/configs/config.py` and come from environment variables
 ## Tests
 
 ```bash
-ruff check src/ tests/ && ruff format --check src/ tests/
+ruff check src/ tests/ scripts/ && ruff format --check src/ tests/ scripts/
 pytest tests/unit                 # no services needed
 pytest tests/integration          # tests that need Postgres, Redis, Qdrant or SeaweedFS skip when those are not reachable
-npm test && npx tsc --noEmit
+npm test && npm run typecheck
 ```
 
 CI (`.github/workflows/ci.yml`) runs all of these with real Postgres, Redis, Qdrant and SeaweedFS containers. It builds the images for amd64 and arm64, runs the demo stack end to end on arm64 with a mock LLM (`tests/e2e/`), and runs the VM setup script on a fresh runner.
+
+Security checks run on every pull request and weekly: `.github/workflows/security.yml` (dependency review, pip-audit, npm audit, gitleaks, Trivy on both images, and an OWASP ZAP baseline and API scan against a disposable demo stack) and `.github/workflows/codeql.yml`. Results go to the repository's Security tab. To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Project layout
 
