@@ -1,0 +1,63 @@
+# Weekly dependency updates, grouped per ecosystem so each week brings at
+# most a few pull requests. Minor and patch updates are grouped; a major
+# update gets its own pull request because it may need code changes.
+# Security updates (when enabled in the repository settings) are separate
+# and arrive as soon as an advisory is published.
+version: 2
+updates:
+  # requirements.txt, requirements-dev.txt and constraints.txt (referenced
+  # from requirements-dev.txt), so the pins stay in step.
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      python:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      frontend:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    open-pull-requests-limit: 5
+
+  # Base images in docker/Dockerfile and docker/Dockerfile.web.
+  - package-ecosystem: docker
+    directory: "/docker"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      docker-images:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # Service images in the compose files.
+  - package-ecosystem: docker-compose
+    directories: ["/docker", "/tests/e2e"]
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      compose-images:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # Actions are pinned to commit SHAs; Dependabot moves the SHA and the
+  # version comment together.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
