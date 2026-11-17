@@ -86,11 +86,11 @@ jobs:
       POSTGRES_PASSWORD: testpassword
       REDIS_URL: redis://localhost:6379/0
       QDRANT_URL: http://localhost:6333
-      STORAGE_BACKEND: minio
-      MINIO_ENDPOINT: localhost:8333
-      MINIO_ACCESS_KEY: ci-access-key
-      MINIO_SECRET_KEY: ci-secret-key-not-a-real-secret
-      MINIO_BUCKET: docusage-test
+      STORAGE_BACKEND: s3_compatible
+      S3_ENDPOINT: localhost:8333
+      S3_ACCESS_KEY: ci-access-key
+      S3_SECRET_KEY: ci-secret-key-not-a-real-secret
+      S3_BUCKET: docusage-test
     services:
       postgres:
         image: postgres:16-alpine
@@ -131,7 +131,7 @@ jobs:
       - name: Start SeaweedFS
         run: |
           docker run -d --name seaweedfs -p 8333:8333 \
-            -e S3_ACCESS_KEY="$MINIO_ACCESS_KEY" -e S3_SECRET_KEY="$MINIO_SECRET_KEY" \
+            -e S3_ACCESS_KEY -e S3_SECRET_KEY \
             -v "$PWD/docker/seaweedfs/start.sh:/start.sh:ro" \
             --entrypoint /bin/sh chrislusf/seaweedfs:4.51 /start.sh
           for i in $(seq 1 60); do curl -sf http://localhost:8333/healthz && exit 0; sleep 1; done

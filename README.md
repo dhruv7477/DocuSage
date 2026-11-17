@@ -80,7 +80,7 @@ All settings live in `src/configs/config.py` and come from environment variables
 | `LLM_MODEL`, `ROUTER_MODEL`, `SUMMARY_MODEL` | Answer model, question router model, and summary model (defaults to the router model). With `openai`, the answer model is `OPENAI_MODEL`. |
 | `EMBEDDING_PROVIDER` | `bge` (default, local CPU) or `openai` |
 | `RERANKER` | `cross_encoder` (default), `llm` or `none` |
-| `STORAGE_BACKEND` | `minio`: any S3-compatible endpoint, configured with the `MINIO_*` settings (SeaweedFS in the compose files); or `s3` for Amazon S3 |
+| `STORAGE_BACKEND` | `s3_compatible` (default): any S3-compatible server, configured with `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET` and `S3_SECURE` (SeaweedFS in the compose files); or `s3` for Amazon S3 with the `AWS_*` settings and `S3_BUCKET`. The old `minio` value and `MINIO_*` names still work for now and log a warning at startup. |
 | `RATE_LIMIT_*` | Per-IP limits on sign-up and sign-in, per-user limits on questions, uploads, chats and page images. Counters live in memory, or in Redis with `RATE_LIMIT_STORAGE_URI`. |
 | `QUOTA_*` | Per-user limits on documents, upload size and questions per day. 0 (the default) means unlimited. |
 | `DEMO_MODE` | Sample documents for new accounts, a nightly wipe of uploads, and the notice on the sign-up page |

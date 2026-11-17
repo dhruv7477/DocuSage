@@ -31,6 +31,7 @@ from kombu import Queue
 from celery.signals import worker_process_init, worker_ready
 
 from src.configs.config import get_settings
+from src.core.deprecations import warn_deprecated_settings
 from src.core.logger import get_logger
 
 log = get_logger(__name__)
@@ -127,6 +128,7 @@ def _prewarm_worker_models(**_kwargs) -> None:
 @worker_ready.connect
 def _sweep_stale_documents_on_start(**_kwargs) -> None:
     """Fail documents a previous worker left in flight (crash, kill, deploy)."""
+    warn_deprecated_settings(settings)
     try:
         from src.workers.tasks import fail_stale_documents_task
 

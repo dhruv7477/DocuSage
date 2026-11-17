@@ -45,7 +45,7 @@ os.environ.setdefault("EMBEDDING_PROVIDER", "bge")
 os.environ.setdefault("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
 os.environ.setdefault("EMBEDDING_DEVICE", "cpu")
 os.environ.setdefault("VECTOR_STORE", "qdrant")
-os.environ.setdefault("STORAGE_BACKEND", "minio")
+os.environ.setdefault("STORAGE_BACKEND", "s3_compatible")
 # Tests must never hard-abort on missing deps regardless of what .env
 # says — readiness failures should surface per-test, not at app boot.
 os.environ["STRICT_STARTUP"] = "false"

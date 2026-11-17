@@ -187,7 +187,7 @@ async def _probe_qdrant(timeout: float) -> ProbeResult:
 
 async def _probe_storage(timeout: float) -> ProbeResult:
     """
-    Verify MinIO/S3 is reachable AND the configured bucket exists.
+    Verify the S3 server is reachable AND the configured bucket exists.
 
     Note: `StorageService._get_client()` is synchronous and lazy. We run
     it in the default thread pool so a hung connection respects the
@@ -206,24 +206,24 @@ async def _probe_storage(timeout: float) -> ProbeResult:
             # AND auth; it's already invoked inside _get_client during
             # initial setup, but call again to keep the probe self-contained
             # against future refactors.
-            if settings.storage_backend == "minio":
-                client.bucket_exists(bucket)
-            else:
+            if settings.storage_backend == "s3":
                 client.head_bucket(Bucket=bucket)
+            else:
+                client.bucket_exists(bucket)
 
         await asyncio.wait_for(asyncio.to_thread(_ping_storage), timeout=timeout)
         return ProbeResult(
             name="storage",
             ok=True,
             required=True,
-            detail=f"ok ({settings.storage_backend} bucket={settings.minio_bucket if settings.storage_backend == 'minio' else settings.s3_bucket})",
+            detail=f"ok ({settings.storage_backend} bucket={settings.s3_bucket})",
             latency_ms=int((time.monotonic() - started) * 1000),
         )
     except Exception as exc:
         endpoint = (
-            settings.minio_endpoint
-            if settings.storage_backend == "minio"
-            else f"s3 ({settings.aws_region})"
+            f"s3 ({settings.aws_region})"
+            if settings.storage_backend == "s3"
+            else settings.s3_endpoint
         )
         return ProbeResult(
             name="storage",
@@ -231,7 +231,7 @@ async def _probe_storage(timeout: float) -> ProbeResult:
             required=True,
             detail=(
                 f"Cannot reach storage at {endpoint}. "
-                "Start MinIO (e.g. `docker compose up minio`) and ensure "
+                "Start the S3 server (`make dev-up` starts SeaweedFS) and ensure "
                 f"the bucket exists. ({type(exc).__name__})"
             ),
             latency_ms=int((time.monotonic() - started) * 1000),
