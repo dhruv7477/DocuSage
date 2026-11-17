@@ -17,5 +17,12 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
     css: false,
+    // `npm run test:coverage` writes coverage/lcov.info for SonarQube Cloud.
+    coverage: {
+      provider: 'v8',
+      reporter: ['text-summary', 'lcov'],
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: ['src/**/__tests__/**', 'src/test/**', 'src/**/*.d.ts'],
+    },
   },
 })

@@ -10,12 +10,17 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Read-only by default; no job here needs more.
+permissions:
+  contents: read
+
 env:
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "22"
   RUFF_VERSION: "0.7.0" # keep in step with requirements-dev.txt
   TORCH_VERSION: "2.15.0" # keep in step with requirements.txt
   DOCKER_IMAGE: docusage-api
+  SHELLCHECK_IMAGE: koalaman/shellcheck:v0.10.0@sha256:2097951f02e735b613f4a34de20c40f937a6c8f18ecb170612c88c34517221fb
 
 jobs:
   # ── Lint ────────────────────────────────────────────────────────
@@ -23,27 +28,31 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install ruff
-        run: pip install "ruff==${RUFF_VERSION}"
+        run: |
+          pip install --only-binary :all: "ruff==${RUFF_VERSION}"
 
       - name: Ruff lint
-        run: ruff check src/ tests/
+        run: ruff check src/ tests/ scripts/
 
       - name: Ruff format check
-        run: ruff format --check src/ tests/
+        run: ruff format --check src/ tests/ scripts/
 
       - name: Shell scripts
         run: |
-          docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
+          docker run --rm -v "$PWD:/mnt" -w /mnt "$SHELLCHECK_IMAGE" \
             docker/scripts/entrypoint.sh docker/seaweedfs/start.sh \
-            scripts/demo-env.sh deploy/oracle/setup-vm.sh deploy/oracle/backup-db.sh
+            scripts/demo-env.sh deploy/oracle/setup-vm.sh deploy/oracle/backup-db.sh \
+            tests/e2e/start-stack.sh
 
       - name: No CRLF line endings committed
         run: |
@@ -55,22 +64,32 @@ jobs:
     name: Unit Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
       # The CPU wheel avoids downloading several GB of CUDA libraries.
+      # Wheels only, so no package's setup script runs during the install.
       - name: Install dependencies
         run: |
-          pip install "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu
-          pip install -r requirements-dev.txt -c constraints.txt
+          pip install --only-binary :all: "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu
+          pip install --only-binary :all: -r requirements-dev.txt
 
       - name: Run unit tests
-        run: pytest tests/unit/ --tb=short -x
+        run: pytest tests/unit/ --tb=short -x --cov --cov-report=xml:coverage-unit.xml
+
+      - name: Keep coverage for SonarQube Cloud
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-unit
+          path: coverage-unit.xml
+          retention-days: 7
 
   # ── Integration Tests ───────────────────────────────────────────
   test-integration:
@@ -113,18 +132,20 @@ jobs:
         image: qdrant/qdrant:v1.11.3
         ports: ["6333:6333"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
       - name: Install dependencies
         run: |
-          pip install "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu
-          pip install -r requirements-dev.txt -c constraints.txt
+          pip install --only-binary :all: "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu
+          pip install --only-binary :all: -r requirements-dev.txt
 
       # S3 storage for tests/integration/test_storage_s3.py. A step, not a
       # service container, because it needs a custom entrypoint.
@@ -141,28 +162,81 @@ jobs:
         run: alembic upgrade head
 
       - name: Run integration tests
-        run: pytest tests/integration/ --tb=short -x
+        run: pytest tests/integration/ --tb=short -x --cov --cov-report=xml:coverage-integration.xml
+
+      - name: Keep coverage for SonarQube Cloud
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-integration
+          path: coverage-integration.xml
+          retention-days: 7
 
   # ── Frontend ────────────────────────────────────────────────────
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - run: npm ci
+      # No lifecycle scripts: nothing here needs them.
+      - run: npm ci --ignore-scripts
       - name: Type check
-        run: npx tsc --noEmit
-      - name: Unit tests
-        run: npm test
+        run: npm run typecheck
+      - name: Unit tests with coverage
+        run: npm run test:coverage
       - name: Build
         run: npm run build
+
+      - name: Keep coverage for SonarQube Cloud
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-frontend
+          path: coverage/lcov.info
+          retention-days: 7
+
+  # ── SonarQube Cloud ─────────────────────────────────────────────
+  # Code quality and the "Sonar way" quality gate on new code, with the
+  # coverage from the three test jobs. Skips with a notice until the
+  # SONAR_TOKEN secret exists (it is never available to forks or Dependabot).
+  sonarcloud:
+    name: SonarQube Cloud
+    runs-on: ubuntu-latest
+    needs: [test-unit, test-integration, frontend]
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - name: Skip without SONAR_TOKEN
+        if: env.SONAR_TOKEN == ''
+        run: echo "::notice title=SonarQube Cloud skipped::The SONAR_TOKEN secret is not set, so no analysis ran."
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.SONAR_TOKEN != ''
+        with:
+          fetch-depth: 0 # blame data for "new code"
+          persist-credentials: false
+
+      - name: Fetch coverage
+        if: env.SONAR_TOKEN != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+
+      - name: Put the frontend report where sonar-project.properties expects it
+        if: env.SONAR_TOKEN != ''
+        run: mkdir -p coverage && mv lcov.info coverage/lcov.info
+
+      - name: Analyse
+        if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1
 
   # ── Docker Build ────────────────────────────────────────────────
   # Native builds on both architectures. arm64 is the demo VM.
@@ -178,17 +252,19 @@ jobs:
           - arch: amd64
             runner: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # A canary .env proves .dockerignore keeps secrets out of the image.
       - name: Plant a canary .env
         run: echo "CANARY=must-not-reach-the-image" > .env
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Build image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: docker/Dockerfile
@@ -221,15 +297,12 @@ jobs:
     env:
       COMPOSE: docker compose -f docker/docker-compose.demo.yml -f tests/e2e/compose.e2e.yml
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Write docker/.env
-        run: |
-          DEMO_DOMAIN=localhost GROQ_API_KEY=ci-not-a-real-key scripts/demo-env.sh
-          sed -i 's|^LLM_BASE_URL=.*|LLM_BASE_URL=http://mock-llm:8080/v1|' docker/.env
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Start the demo stack
-        run: $COMPOSE up -d --build --wait --wait-timeout 900
+        run: tests/e2e/start-stack.sh
 
       - name: Only Caddy publishes ports
         run: |
@@ -248,13 +321,13 @@ jobs:
           $COMPOSE exec -T redis redis-cli ping | grep -q NOAUTH
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Sign up, upload, ingest, stream a cited answer
         run: |
-          pip install httpx==0.27.2
+          pip install --only-binary :all: httpx==0.27.2
           python -W ignore tests/e2e/demo_e2e.py https://localhost
 
       - name: Database backup can be restored
@@ -275,7 +348,9 @@ jobs:
     runs-on: ubuntu-24.04-arm
     needs: [lint]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: First run
         run: sudo SWAP_SIZE=1G deploy/oracle/setup-vm.sh
       - name: Second run is a no-op

@@ -4,6 +4,7 @@ tests/unit/test_workflows.py
 Static checks on the GitHub Actions workflows.
 """
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -47,3 +48,47 @@ def test_no_workflow_publishes_images(path: Path) -> None:
     for scope in scopes:
         if isinstance(scope, dict):
             assert scope.get("packages") != "write", path.name
+
+
+_PINNED_ACTION = re.compile(r"^[\w.-]+/[\w./-]+@[0-9a-f]{40}$")
+
+
+def _jobs(workflow: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return workflow.get("jobs", {})
+
+
+@pytest.mark.parametrize("path", WORKFLOWS, ids=lambda p: p.name)
+def test_every_action_is_pinned_to_a_commit(path: Path) -> None:
+    for step in _steps(_load(path)):
+        uses = step.get("uses")
+        if uses and not uses.startswith("./"):
+            assert _PINNED_ACTION.match(uses), f"{path.name}: {uses} is not a SHA"
+
+
+@pytest.mark.parametrize("path", WORKFLOWS, ids=lambda p: p.name)
+def test_default_permissions_are_read_only(path: Path) -> None:
+    permissions = _load(path).get("permissions")
+    assert isinstance(permissions, dict), f"{path.name}: no top-level permissions"
+    assert "write" not in permissions.values(), path.name
+
+
+@pytest.mark.parametrize("path", WORKFLOWS, ids=lambda p: p.name)
+def test_checkout_does_not_keep_the_token(path: Path) -> None:
+    for step in _steps(_load(path)):
+        if step.get("uses", "").startswith("actions/checkout@"):
+            assert step.get("with", {}).get("persist-credentials") is False, path.name
+
+
+@pytest.mark.parametrize("path", WORKFLOWS, ids=lambda p: p.name)
+def test_container_images_in_env_are_pinned_by_digest(path: Path) -> None:
+    for name, value in (_load(path).get("env") or {}).items():
+        if name.endswith("_IMAGE") and name != "DOCKER_IMAGE":
+            assert "@sha256:" in str(value), f"{path.name}: {name} has no digest"
+
+
+@pytest.mark.parametrize("path", WORKFLOWS, ids=lambda p: p.name)
+def test_pip_installs_wheels_only(path: Path) -> None:
+    for step in _steps(_load(path)):
+        for line in str(step.get("run", "")).splitlines():
+            if "pip install" in line:
+                assert "--only-binary :all:" in line, f"{path.name}: {line.strip()}"
