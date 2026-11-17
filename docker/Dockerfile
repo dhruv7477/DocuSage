@@ -8,8 +8,7 @@ COPY requirements.txt constraints.txt ./
 # several GB of CUDA libraries this app never uses. The version is read from
 # constraints.txt so it is pinned in one place. Wheels only, so no package's
 # setup script runs during the build.
-RUN pip install --no-cache-dir --only-binary :all: --upgrade pip \
-    && pip install --no-cache-dir --only-binary :all: "$(grep '^torch==' constraints.txt)" \
+RUN pip install --no-cache-dir --only-binary :all: "$(grep '^torch==' constraints.txt)" \
         --index-url https://download.pytorch.org/whl/cpu \
     && pip install --no-cache-dir --only-binary :all: -r requirements.txt -c constraints.txt \
     && pip uninstall -y pip

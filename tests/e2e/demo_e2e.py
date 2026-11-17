@@ -10,9 +10,16 @@ CI also checks that only Caddy publishes ports (see .github/workflows/ci.yml).
 
 Usage: python tests/e2e/demo_e2e.py [https://localhost]
 Needs only httpx. Exits non-zero on the first failed check.
+
+Caddy signs https://localhost with its own local CA. Set E2E_CA_CERT to that
+CA's root certificate (CI copies it out of the caddy container) so the
+certificate is verified as a browser would; without it the system trust
+store is used.
 """
 
 import json
+import os
+import ssl
 import sys
 import time
 import uuid
@@ -151,8 +158,13 @@ def stream_answer(
     }
 
 
+def _tls() -> ssl.SSLContext:
+    """Verify the server certificate, against E2E_CA_CERT when it is set."""
+    return ssl.create_default_context(cafile=os.environ.get("E2E_CA_CERT"))
+
+
 def main() -> None:
-    with httpx.Client(timeout=120, verify=False, follow_redirects=False) as c:
+    with httpx.Client(timeout=120, verify=_tls(), follow_redirects=False) as c:
         check(c.get(f"{BASE}/health").status_code == 200, "GET /health through Caddy")
         home = c.get(f"{BASE}/")
         check('<div id="root">' in home.text, "the frontend is served at /")

@@ -34,12 +34,27 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      # Dependency review needs the repository's dependency graph. Until it
+      # is switched on (Settings, Advanced Security), skip with a notice.
+      - name: Dependency graph enabled?
+        id: graph
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/dependency-graph/sbom" --silent 2>/dev/null; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=Dependency review skipped::The dependency graph is off for this repository, so there is nothing to review."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.graph.outputs.enabled == 'true'
         with:
           persist-credentials: false
       # Fails when the pull request adds a dependency with a high or
       # critical advisory.
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        if: steps.graph.outputs.enabled == 'true'
         with:
           fail-on-severity: high
           comment-summary-in-pr: never
@@ -186,7 +201,10 @@ jobs:
 
       - name: Prepare the scan
         run: |
-          mkdir -p "$ZAP_WRK" && chmod 777 "$ZAP_WRK"
+          mkdir -p "$ZAP_WRK"
+          # Caddy's local CA, so curl verifies https://localhost.
+          ca="$RUNNER_TEMP/caddy-root.crt"
+          $COMPOSE cp caddy:/data/caddy/pki/authorities/local/root.crt "$ca"
           cp tests/security/zap/rules.tsv "$ZAP_WRK/"
           # The OpenAPI schema comes from the running app; the app itself
           # serves no /docs or /openapi.json in production.
@@ -196,13 +214,17 @@ jobs:
           # A throwaway account, so the API scan runs signed in.
           email="zap-$(date +%s)@example.com"
           password="Zap-$(openssl rand -hex 12)-Aa1"
-          curl -skf https://localhost/api/v1/auth/register -H 'Content-Type: application/json' \
+          curl -sf --cacert "$ca" https://localhost/api/v1/auth/register -H 'Content-Type: application/json' \
             -d "{\"email\":\"$email\",\"password\":\"$password\",\"full_name\":\"ZAP\"}" > /dev/null
-          token=$(curl -skf https://localhost/api/v1/auth/login -H 'Content-Type: application/json' \
-            -d "{\"email\":\"$email\",\"password\":\"$password\"}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+          curl -sf --cacert "$ca" https://localhost/api/v1/auth/login -H 'Content-Type: application/json' \
+            -d "{\"email\":\"$email\",\"password\":\"$password\"}" -o "$RUNNER_TEMP/login.json"
+          token=$(jq -r .access_token "$RUNNER_TEMP/login.json")
+          rm "$RUNNER_TEMP/login.json"
           echo "::add-mask::$token"
           echo "ZAP_TOKEN=$token" >> "$GITHUB_ENV"
           echo "CADDY=$($COMPOSE ps -q caddy)" >> "$GITHUB_ENV"
+          # ZAP runs as uid 1000 and writes its reports here.
+          sudo chown 1000:1000 "$ZAP_WRK"
 
       # ZAP shares Caddy's network namespace, so https://localhost is the
       # stack. Exit codes 0 to 2 mean the scan ran (2 = warnings);
