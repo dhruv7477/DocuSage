@@ -271,16 +271,21 @@ jobs:
     needs: [lint]
     steps:
       - uses: actions/checkout@v4
+      # The runner already has /swapfile, so use a separate file to exercise
+      # the creation path.
       - name: First run
-        run: sudo SWAP_SIZE=1G deploy/oracle/setup-vm.sh
+        run: |
+          sudo SWAP_SIZE=1G SWAP_FILE=/docusage-swapfile deploy/oracle/setup-vm.sh | tee first-run.log
+          grep -q "Created a 1G swap file at /docusage-swapfile" first-run.log
       - name: Second run is a no-op
         run: |
-          sudo SWAP_SIZE=1G deploy/oracle/setup-vm.sh | tee second-run.log
-          grep -q "already active" second-run.log
+          sudo SWAP_SIZE=1G SWAP_FILE=/docusage-swapfile deploy/oracle/setup-vm.sh | tee second-run.log
+          grep -q "/docusage-swapfile is already active" second-run.log
           grep -q "INPUT already accepts tcp/443" second-run.log
       - name: Result
         run: |
-          swapon --show
+          swapon --show | grep -q /docusage-swapfile
+          grep -q "^/docusage-swapfile none swap" /etc/fstab
           sudo iptables -C INPUT -p tcp -m state --state NEW -m tcp --dport 443 -j ACCEPT
           test -f /etc/cron.d/docusage-backup
 
