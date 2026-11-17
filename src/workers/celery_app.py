@@ -11,6 +11,10 @@ Queue design:
     ingestion  — document processing (CPU + I/O heavy, concurrency=2)
     default    — lightweight tasks (cleanup, notifications)
 
+Both queues are declared in `task_queues`, so a worker started without
+-Q consumes both. Before, a plain `celery worker` listened only on the
+implicit "celery" queue and uploads sat in "ingestion" forever.
+
 Pre-warming
 -----------
 The first ingestion task in a fresh worker process used to spend several
@@ -21,10 +25,9 @@ so that tax is paid exactly once, before any real document hits the
 queue. Subsequent tasks reuse the cached singleton.
 """
 
-import asyncio
-
 from celery import Celery
-from celery.signals import worker_process_init
+from kombu import Queue
+from celery.signals import worker_process_init, worker_ready
 
 from src.configs.config import get_settings
 from src.core.logger import get_logger
@@ -59,9 +62,19 @@ celery_app.conf.update(
     # Silence Celery 5→6 migration warning about broker retry behaviour
     broker_connection_retry_on_startup=True,
     # Routing
+    task_queues=(Queue("ingestion"), Queue("default")),
+    task_default_queue="default",
     task_routes={
         "src.workers.tasks.ingest_document_task": {"queue": "ingestion"},
         "src.workers.tasks.delete_document_vectors_task": {"queue": "default"},
+        "src.workers.tasks.fail_stale_documents_task": {"queue": "default"},
+    },
+    # Periodic jobs (needs `celery beat`, or a worker started with -B)
+    beat_schedule={
+        "fail-stale-documents": {
+            "task": "src.workers.tasks.fail_stale_documents_task",
+            "schedule": 600.0,  # every 10 minutes
+        },
     },
 )
 
@@ -77,9 +90,11 @@ def _prewarm_worker_models(**_kwargs) -> None:
     try:
         from src.providers.embedding.factory import get_embedding_provider
 
+        from src.workers import runtime
+
         embedder = get_embedding_provider()
         log.info("worker_prewarm_start", provider=embedder.provider_name)
-        ok = asyncio.run(embedder.health())
+        ok = runtime.run(embedder.health())
         log.info(
             "worker_prewarm_done",
             provider=embedder.provider_name,
@@ -88,3 +103,14 @@ def _prewarm_worker_models(**_kwargs) -> None:
         )
     except Exception as exc:
         log.warning("worker_prewarm_failed", error=str(exc))
+
+
+@worker_ready.connect
+def _sweep_stale_documents_on_start(**_kwargs) -> None:
+    """Fail documents a previous worker left in flight (crash, kill, deploy)."""
+    try:
+        from src.workers.tasks import fail_stale_documents_task
+
+        fail_stale_documents_task.delay()
+    except Exception as exc:
+        log.warning("stale_sweep_dispatch_failed", error=str(exc))
