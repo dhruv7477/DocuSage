@@ -69,6 +69,23 @@ def _document_row_committed(document_id: str) -> bool:
         engine.dispose()
 
 
+def _set_role(user_id: str, role: str) -> None:
+    """Change a user's global role directly in the database."""
+    from sqlalchemy import create_engine, text
+
+    from src.configs.config import get_settings
+
+    engine = create_engine(get_settings().database_url_sync)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("UPDATE users SET role = :role WHERE id = :id"),
+                {"role": role, "id": user_id},
+            )
+    finally:
+        engine.dispose()
+
+
 def _postgres_reachable() -> bool:
     """The smoke pipeline writes real rows — it needs a live Postgres."""
     from src.configs.config import get_settings
@@ -378,7 +395,16 @@ class TestSmokePipeline:
         assert resp.status_code == 403
 
     def test_18_eval_run(self, client, state):
-        """Eval endpoint accepts a Q&A pair and returns metrics."""
+        """Eval is admin-only: a member gets 403, an admin gets metrics."""
+        body = {
+            "question": "What is DocuSage?",
+            "answer": "A RAG-powered knowledge assistant.",
+            "contexts": ["DocuSage is an AI assistant for private documents."],
+        }
+        member = client.post("/api/v1/eval/run", json=body, headers=state["headers"])
+        assert member.status_code == 403
+
+        _set_role(state["user_id"], "admin")
         with patch("src.services.eval_service.EvalService.evaluate") as mock_eval:
             from src.services.eval_service import EvalResult
 
@@ -392,15 +418,7 @@ class TestSmokePipeline:
                 context_recall=None,
                 answer_similarity=None,
             )
-            resp = client.post(
-                "/api/v1/eval/run",
-                json={
-                    "question": "What is DocuSage?",
-                    "answer": "A RAG-powered knowledge assistant.",
-                    "contexts": ["DocuSage is an AI assistant for private documents."],
-                },
-                headers=state["headers"],
-            )
+            resp = client.post("/api/v1/eval/run", json=body, headers=state["headers"])
         assert resp.status_code == 200
         data = resp.json()
         assert "composite_score" in data
