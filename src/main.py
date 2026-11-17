@@ -29,7 +29,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from src.api.v1 import api_v1_router
 from src.configs.config import get_settings
 from src.core.audit import AuditMiddleware
-from src.core.exceptions import PrivateAIException
+from src.core.exceptions import DocuSageError
 from src.core.logger import configure_logging, get_logger
 from src.core.rate_limit import limiter
 from src.db.session import AsyncSessionLocal
@@ -316,16 +316,16 @@ def _register_middleware(app: FastAPI) -> None:
 
 def _register_exception_handlers(app: FastAPI) -> None:
     """
-    Convert all PrivateAIException subclasses to consistent JSON error responses.
+    Convert all DocuSageError subclasses to consistent JSON error responses.
     Format: { "error_code": "...", "message": "...", "detail": "..." }
 
     Why: Service layer raises domain exceptions; routes never catch them —
     the handler here is the single catch point.
     """
 
-    @app.exception_handler(PrivateAIException)
+    @app.exception_handler(DocuSageError)
     async def domain_exception_handler(
-        request: Request, exc: PrivateAIException
+        request: Request, exc: DocuSageError
     ) -> JSONResponse:
         log.warning(
             "domain_exception",

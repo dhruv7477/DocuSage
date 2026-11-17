@@ -298,10 +298,10 @@ class AdminService:
         result = await self._db.execute(select(AuditLog).where(AuditLog.id == log_id))
         entry = result.scalar_one_or_none()
         if not entry:
-            from src.core.exceptions import PrivateAIException
+            from src.core.exceptions import DocuSageError
             from http import HTTPStatus
 
-            raise PrivateAIException(
+            raise DocuSageError(
                 message=f"Audit log {log_id} not found.",
                 status_code=HTTPStatus.NOT_FOUND.value,
                 error_code="AUDIT_LOG_NOT_FOUND",

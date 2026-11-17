@@ -79,19 +79,19 @@ class Settings(BaseSettings):
     vector_store: Literal["qdrant", "pinecone", "weaviate"] = "qdrant"
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str = ""
-    qdrant_collection_prefix: str = "privateai"
+    qdrant_collection_prefix: str = "docusage"
 
     # ── Storage ──────────────────────────────────────────────────
     storage_backend: Literal["minio", "s3"] = "minio"
     minio_endpoint: str = "localhost:9000"
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
-    minio_bucket: str = "privateai-docs"
+    minio_bucket: str = "docusage-docs"
     minio_secure: bool = False
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     aws_region: str = "us-east-1"
-    s3_bucket: str = "privateai-docs"
+    s3_bucket: str = "docusage-docs"
 
     # ── LLM ──────────────────────────────────────────────────────
     # Default is qwen2.5:7b-instruct (~4.7 GB Q4_K_M) — runs on CPU on a
@@ -291,7 +291,7 @@ class Settings(BaseSettings):
     smtp_port: int = 587
     smtp_user: str = ""
     smtp_password: str = ""
-    emails_from: str = "noreply@privateai.com"
+    emails_from: str = "noreply@example.com"
 
     @model_validator(mode="after")
     def validate_production_settings(self) -> "Settings":

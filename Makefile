@@ -8,10 +8,9 @@
 
 COMPOSE       ?= docker compose --env-file .env -f docker/docker-compose.yml
 # Dev answer model: 3B on this ARM/CPU box (fits 16 GB, ~2x faster than 7B).
-# Prod uses the 7B on GPU via docker-compose.prod.yml. Override: make LLM_MODEL=...
+# Override: make LLM_MODEL=... (the public demo uses a hosted model instead).
 LLM_MODEL     ?= qwen2.5:3b-instruct
 ROUTER_MODEL  ?= qwen2.5:1.5b-instruct
-MINIO_BUCKET  ?= privateai-docs
 
 # Celery's default `prefork` pool does not work on Windows — workers
 # come up but never actually pick up tasks. Detect Windows and pick a

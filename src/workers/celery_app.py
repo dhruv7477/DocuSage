@@ -38,7 +38,7 @@ log = get_logger(__name__)
 settings = get_settings()
 
 celery_app = Celery(
-    "privateai",
+    "docusage",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
     include=["src.workers.tasks", "src.workers.demo_tasks"],
