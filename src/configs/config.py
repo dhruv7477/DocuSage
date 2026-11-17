@@ -196,6 +196,11 @@ class Settings(BaseSettings):
     # rag_query. Kill switch for debugging — when false, every query
     # goes straight to the RAG path (pre-router behavior).
     enable_question_router: bool = True
+    # Whole-document summaries (map-reduce, several LLM calls each). When
+    # off, summary requests get a normal cited answer with a warning. The
+    # demo turns them off: one summary can exceed a free tier's per-minute
+    # token limit on its own.
+    doc_summary_enabled: bool = True
     # Heuristics (regex greeting / summary detection) always run first and
     # are instant. The "is this about the documents?" decision is then made
     # by the RETRIEVAL SCORE, not an LLM: non-heuristic queries go to RAG,

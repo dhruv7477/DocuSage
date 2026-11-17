@@ -154,6 +154,7 @@ def _get_orchestrator(
             get_vector_store(), get_summary_llm_provider()
         ),
         enable_router=_settings.enable_question_router,
+        enable_summaries=_settings.doc_summary_enabled,
     )
 
 

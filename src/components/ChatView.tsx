@@ -78,6 +78,7 @@ function WarningBanner({ warning }: { warning: StreamWarning }) {
     warning.code === 'low_confidence' ? 'Low confidence'
     : warning.code === 'no_documents' ? 'No documents indexed'
     : warning.code === 'partial_context' ? 'Partial match'
+    : warning.code === 'summaries_disabled' ? 'Summaries off'
     : 'Notice'
   return (
     <div className="flex items-start gap-2 px-3 py-2 mt-2 bg-amber/8 border border-amber/25 rounded-lg text-xs">
