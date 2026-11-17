@@ -136,6 +136,10 @@ celerybeat.pid
 
 # Environments
 .env
+# Every other env file holds secrets too. Only templates are committed.
+.env.*
+!.env.example
+!.env.*.example
 .envrc
 .venv
 env/

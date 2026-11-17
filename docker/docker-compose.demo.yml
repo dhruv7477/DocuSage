@@ -1,0 +1,194 @@
+# DocuSage public demo on one small VM (built and tested on linux/arm64).
+#
+#   scripts/demo-env.sh                                  # once: writes docker/.env
+#   docker compose -f docker/docker-compose.demo.yml up -d --build
+#
+# Only Caddy publishes ports (80 and 443). Postgres, Redis, Qdrant, SeaweedFS
+# and the API are reachable only on the compose network, and each one has a
+# password or API key. Values come from docker/.env, which Compose reads
+# automatically because it sits next to this file. Each service gets only the
+# variables it needs.
+
+name: docusage-demo
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-app-env: &app-env
+  APP_ENV: production
+  SECRET_KEY: ${SECRET_KEY:?run scripts/demo-env.sh first}
+  ALLOWED_ORIGINS: '["https://${DEMO_DOMAIN:?run scripts/demo-env.sh first}"]'
+  POSTGRES_HOST: postgres
+  POSTGRES_DB: docusage
+  POSTGRES_USER: docusage
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run scripts/demo-env.sh first}
+  REDIS_URL: redis://:${REDIS_PASSWORD:?run scripts/demo-env.sh first}@redis:6379/0
+  CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+  CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/2
+  QDRANT_URL: http://qdrant:6333
+  QDRANT_API_KEY: ${QDRANT_API_KEY:?run scripts/demo-env.sh first}
+  # The "minio" backend is a generic S3 client; here it talks to SeaweedFS.
+  STORAGE_BACKEND: minio
+  MINIO_ENDPOINT: seaweedfs:8333
+  MINIO_ACCESS_KEY: ${S3_ACCESS_KEY:?run scripts/demo-env.sh first}
+  MINIO_SECRET_KEY: ${S3_SECRET_KEY:?run scripts/demo-env.sh first}
+  MINIO_BUCKET: docusage-docs
+  MINIO_SECURE: "false"
+  # Hosted LLM through the OpenAI-compatible client.
+  LLM_PROVIDER: vllm
+  VLLM_BASE_URL: ${LLM_BASE_URL:-https://api.groq.com/openai/v1}
+  VLLM_API_KEY: ${GROQ_API_KEY:?set GROQ_API_KEY in docker/.env}
+  LLM_MODEL: ${LLM_MODEL:?set LLM_MODEL in docker/.env}
+  ROUTER_MODEL: ${ROUTER_MODEL:?set ROUTER_MODEL in docker/.env}
+  SUMMARY_MODEL: ${SUMMARY_MODEL:?set SUMMARY_MODEL in docker/.env}
+  EMBEDDING_PROVIDER: bge
+  EMBEDDING_DEVICE: cpu
+  LOG_LEVEL: INFO
+
+x-app: &app
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+  image: docusage-api:demo
+  restart: unless-stopped
+  logging: *logging
+  volumes:
+    # Embedding and reranker weights (about 220 MB), downloaded once.
+    - hf-cache:/home/appuser/.cache/huggingface
+
+services:
+  caddy:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.web
+    image: docusage-web:demo
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      DEMO_DOMAIN: ${DEMO_DOMAIN:?run scripts/demo-env.sh first}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+
+  api:
+    <<: *app
+    environment:
+      <<: *app-env
+      # Only Caddy can reach the API, so trust its X-Forwarded-For header.
+      FORWARDED_ALLOW_IPS: "*"
+    mem_limit: 2g
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      seaweedfs:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      # First boot downloads the models before the app answers.
+      start_period: 180s
+
+  worker:
+    <<: *app
+    # -B runs Celery beat inside this single worker (stale-document sweep).
+    command: celery -A src.workers.celery_app worker -B --concurrency=1 --loglevel=info
+    environment:
+      <<: *app-env
+      SKIP_MIGRATIONS: "true"
+    # A pathological upload should take down the worker, not the VM.
+    mem_limit: 3g
+    # The image's HTTP healthcheck is for the API. The worker answers a ping
+    # through the broker instead (about 1.5 s of CPU per check).
+    healthcheck:
+      test: ["CMD-SHELL", 'celery -A src.workers.celery_app inspect ping -d "celery@$$HOSTNAME" --timeout 10 >/dev/null']
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 120s
+      start_interval: 5s
+    depends_on:
+      api:
+        # The API container runs the database migrations.
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      POSTGRES_DB: docusage
+      POSTGRES_USER: docusage
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run scripts/demo-env.sh first}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docusage -d docusage"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?run scripts/demo-env.sh first}
+    command: ["sh", "-c", 'exec redis-server --requirepass "$$REDIS_PASSWORD" --save 60 1 --loglevel warning']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", 'redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  qdrant:
+    image: qdrant/qdrant:v1.11.3
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?run scripts/demo-env.sh first}
+      QDRANT__TELEMETRY_DISABLED: "true"
+    volumes:
+      - qdrant-data:/qdrant/storage
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.51
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?run scripts/demo-env.sh first}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?run scripts/demo-env.sh first}
+    entrypoint: ["/bin/sh", "/start.sh"]
+    volumes:
+      - seaweedfs-data:/data
+      - ./seaweedfs/start.sh:/start.sh:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8333/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  caddy-data:
+  caddy-config:
+  hf-cache:
+  pg-data:
+  redis-data:
+  qdrant-data:
+  seaweedfs-data:
