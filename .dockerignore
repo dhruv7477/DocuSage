@@ -1,0 +1,40 @@
+# Keep secrets, local environments and build output out of the build context.
+# Without this file, `COPY . .` bakes .env, .git and a local .venv into the image.
+
+# Secrets and local config
+.env
+.env.*
+**/.env
+**/.env.*
+
+# Version control and editor state
+.git
+.worktrees
+.claude
+.vscode
+.idea
+
+# Python environments and caches
+.venv
+venv
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Frontend dependencies and build output
+node_modules
+dist
+
+# Local data, logs and notes
+docker/data
+docker/volumes
+logs
+*.log
+docs
+DEPLOYMENT_STATUS.md
+WORKLOG.md
+DECISIONS_PENDING.md

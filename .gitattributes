@@ -1,0 +1,13 @@
+# Store text files with LF and check them out with LF on every platform.
+# Without this, a Windows clone with core.autocrlf=true writes CRLF into
+# docker/scripts/entrypoint.sh and the container fails with
+# "exec /entrypoint.sh: no such file or directory".
+* text=auto eol=lf
+
+# Never convert these, even when they look like text.
+*.pdf binary
+*.docx binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
