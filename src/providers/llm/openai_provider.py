@@ -157,9 +157,14 @@ class OpenAIProvider(BaseLLMProvider):
             raise self._provider_error(exc) from exc
 
     async def health(self) -> bool:
+        """True if the endpoint answers and lists the configured model.
+
+        Lists the models rather than retrieving one: IDs such as
+        "openai/gpt-oss-120b" contain a slash, which does not survive the
+        /models/{id} path on every OpenAI-compatible server.
+        """
         try:
-            await self._client.models.retrieve(self._model)
-            return True
+            available = {m.id async for m in self._client.models.list()}
         except Exception as exc:
             log.warning(
                 "llm_health_failed",
@@ -168,3 +173,9 @@ class OpenAIProvider(BaseLLMProvider):
                 error_type=type(exc).__name__,
             )
             return False
+        if self._model not in available:
+            log.warning(
+                "llm_model_not_listed", service=self._service, model=self._model
+            )
+            return False
+        return True

@@ -79,6 +79,33 @@ async def test_json_mode_asks_for_a_json_object() -> None:
     assert json.loads(seen[0].content)["response_format"] == {"type": "json_object"}
 
 
+def _models(*ids: str) -> dict:
+    return {
+        "object": "list",
+        "data": [
+            {"id": i, "object": "model", "created": 0, "owned_by": "x"} for i in ids
+        ],
+    }
+
+
+async def test_health_finds_a_model_id_with_a_slash() -> None:
+    provider, seen = _provider(
+        lambda req, n: httpx.Response(200, json=_models("openai/gpt-oss-120b"))
+    )
+    provider._model = "openai/gpt-oss-120b"
+
+    assert await provider.health() is True
+    assert str(seen[0].url) == f"{GROQ}/models"
+
+
+async def test_health_fails_when_the_model_is_not_listed() -> None:
+    provider, _ = _provider(
+        lambda req, n: httpx.Response(200, json=_models("some-other-model"))
+    )
+
+    assert await provider.health() is False
+
+
 async def test_reasoning_effort_is_sent_only_when_set() -> None:
     def ok(req: httpx.Request, n: int) -> httpx.Response:
         return httpx.Response(200, json=_completion("ok"))
