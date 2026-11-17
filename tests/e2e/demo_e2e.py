@@ -173,6 +173,17 @@ def main() -> None:
             check(r.status_code == 202, f"upload {name} accepted (got {r.status_code})")
             ids[name] = r.json()["id"]
 
+        r = c.post(
+            f"{API}/documents/upload",
+            data={"workspace_id": ws},
+            files={"file": ("one-too-many.txt", notes)},
+            headers=h,
+        )
+        check(
+            r.status_code == 429 and r.json().get("error_code") == "QUOTA_EXCEEDED",
+            f"a sixth document is refused by the demo quota (got {r.status_code})",
+        )
+
         seen = wait_for_documents(c, h, ids)
         for name, statuses in seen.items():
             check(
