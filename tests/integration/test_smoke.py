@@ -2,7 +2,8 @@
 tests/integration/test_smoke.py
 ─────────────────────────────────
 End-to-end smoke test — covers the full happy path of the application
-with all external services mocked.
+against a real Postgres. Every other external service is mocked, and
+storage is an in-memory StorageService.
 
 Flow tested:
     1.  Register user
@@ -28,7 +29,37 @@ from io import BytesIO
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import Depends
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.db.session import get_db
+from src.services.document_service import DocumentService
+from src.services.storage_service import StorageService
+
+
+class InMemoryStorage(StorageService):
+    """StorageService that keeps objects in a dict instead of an S3 bucket.
+
+    Only the blocking client calls are replaced, so path building and the
+    retry wrapper are the real code.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.objects: dict[str, bytes] = {}
+
+    def _upload_sync(self, content: bytes, path: str, content_type: str) -> None:
+        self.objects[path] = content
+
+    def _download_sync(self, path: str) -> bytes:
+        return self.objects[path]
+
+    def _delete_sync(self, path: str) -> None:
+        self.objects.pop(path, None)
+
+    def _presigned_sync(self, path: str, expires: int) -> str:
+        return f"memory://{path}"
 
 
 def _postgres_reachable() -> bool:
@@ -68,9 +99,16 @@ MOCK_EMBEDDER.embed = AsyncMock(return_value=[[0.1] * 1024])
 @pytest.fixture(scope="module")
 def client():
     """Single TestClient for the whole smoke test module."""
+    from src.api.v1.documents import _get_service
     from src.main import create_app
 
     app = create_app()
+    storage = InMemoryStorage()
+
+    def _document_service(db: AsyncSession = Depends(get_db)) -> DocumentService:
+        return DocumentService(db, storage)
+
+    app.dependency_overrides[_get_service] = _document_service
     with (
         patch(
             "src.vector_store.factory.get_vector_store", return_value=MOCK_VECTOR_STORE
