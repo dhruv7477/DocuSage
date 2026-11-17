@@ -2,8 +2,9 @@
 End-to-end check of the demo stack (docker/docker-compose.demo.yml) through
 Caddy, the way a visitor uses it:
 
-  sign up -> upload a 40-page PDF and watch it ingest -> 5 uploads in a row
-  all complete -> a streamed answer with sources.
+  sign up -> the sample documents appear and answer a question -> upload a
+  40-page PDF and watch it ingest -> 5 uploads in a row all complete -> a
+  sixth is refused by the quota -> a streamed answer with sources.
 
 CI also checks that only Caddy publishes ports (see .github/workflows/ci.yml).
 
@@ -22,6 +23,8 @@ BASE = sys.argv[1] if len(sys.argv) > 1 else "https://localhost"
 API = f"{BASE}/api/v1"
 CANARY_PAGE = 17
 QUESTION = "What is the internal codename for the Q3 relocation project?"
+SAMPLE_QUESTION = "When must an employer complete Section 2 of Form I-9?"
+SAMPLE_FILES = {"i-9-instructions.pdf", "nist-csf-2.0.pdf"}
 
 
 def make_pdf(pages: list[list[str]]) -> bytes:
@@ -102,12 +105,32 @@ def wait_for_documents(
     return seen
 
 
-def stream_answer(c: httpx.Client, h: dict, chat_id: str) -> dict:
+def wait_for_samples(c: httpx.Client, h: dict, limit_s: int = 900) -> str:
+    """Wait until the account's "Sample documents" workspace is fully copied."""
+    deadline = time.monotonic() + limit_s
+    while time.monotonic() < deadline:
+        for ws in c.get(f"{API}/workspaces", headers=h).json():
+            if ws["name"] != "Sample documents":
+                continue
+            docs = c.get(
+                f"{API}/documents", params={"workspace_id": ws["id"]}, headers=h
+            ).json()["documents"]
+            names = {d["original_filename"] for d in docs if d["status"] == "completed"}
+            if names == SAMPLE_FILES:
+                return ws["id"]
+        time.sleep(2)
+    check(False, f"sample documents ready within {limit_s}s")
+    return ""
+
+
+def stream_answer(
+    c: httpx.Client, h: dict, chat_id: str, question: str = QUESTION
+) -> dict:
     events: list[dict] = []
     with c.stream(
         "GET",
         f"{API}/chat/{chat_id}/stream",
-        params={"query": QUESTION},
+        params={"query": question},
         headers=h,
         timeout=300,
     ) as r:
@@ -151,6 +174,24 @@ def main() -> None:
             f"{API}/auth/login", json={"email": email, "password": password}
         ).json()["access_token"]
         h = {"Authorization": f"Bearer {token}"}
+
+        info = c.get(f"{API}/demo").json()
+        check(
+            info["enabled"] and info["questions_per_day"] == 30 and info["llm_host"],
+            f"demo info is public and reports the limits: {info}",
+        )
+        sample_ws = wait_for_samples(c, h)
+        check(True, "the new account got both sample documents")
+        sample_chat = c.post(
+            f"{API}/chat", json={"workspace_id": sample_ws}, headers=h
+        ).json()["id"]
+        sample = stream_answer(c, h, sample_chat, SAMPLE_QUESTION)
+        sources = {s.get("source") for s in sample["sources"]}
+        check(
+            "i-9-instructions.pdf" in sources,
+            f"a question about Form I-9 cites the sample: {sources}",
+        )
+
         ws = c.post(f"{API}/workspaces", json={"name": "e2e"}, headers=h).json()["id"]
 
         pdf = handbook_pdf()
