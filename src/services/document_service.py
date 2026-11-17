@@ -72,8 +72,13 @@ class DocumentService:
         Steps:
             1. Validate membership, file type, file size
             2. Upload to MinIO/S3
-            3. Create Document record (status=PENDING)
+            3. Create Document record (status=PENDING) and commit it
             4. Return document — Celery task is dispatched separately
+
+        The row is committed here, not at the end of the request, because
+        the ingestion worker reads it in its own transaction. A task
+        queued before the commit could start, find no row, and leave the
+        document PENDING forever.
 
         Raises:
             WorkspaceAccessDeniedError: user not a member
@@ -117,7 +122,7 @@ class DocumentService:
             existing.chunk_count = 0
             existing.progress = 0
             existing.error_message = None
-            await self._db.flush()
+            await self._db.commit()
             log.info("document_re_uploaded", document_id=str(doc_id), filename=filename)
             return existing
 
@@ -151,7 +156,7 @@ class DocumentService:
                 status=DocumentStatus.PENDING,
             )
             self._db.add(document)
-            await self._db.flush()
+            await self._db.commit()
         except Exception:
             try:
                 await self._storage.delete(storage_path)
