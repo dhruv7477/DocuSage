@@ -55,7 +55,8 @@ def test_lost_worker_fails_the_task_instead_of_redelivering(monkeypatch) -> None
     # A file that kills the pool process must not be redelivered forever
     # (DECISIONS D4): the message is acked and the task is marked failed.
     backend = Mock()
-    monkeypatch.setattr(ingest_document_task, "backend", backend)
+    # Patch the attribute behind the `backend` property, which has no deleter.
+    monkeypatch.setattr(ingest_document_task, "_backend", backend)
     on_ack, on_reject = Mock(), Mock()
 
     _request_for(ingest_document_task, on_ack, on_reject).on_failure(_worker_lost())

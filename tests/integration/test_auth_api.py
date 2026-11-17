@@ -108,9 +108,9 @@ class TestLoginEndpoint:
 
 
 class TestMeEndpoint:
-    def test_me_without_token_returns_403(self, client):
+    def test_me_without_token_returns_401(self, client):
         resp = client.get("/api/v1/auth/me")
-        assert resp.status_code in (401, 403)
+        assert resp.status_code == 401
 
     def test_me_with_invalid_token_returns_401(self, client):
         resp = client.get(

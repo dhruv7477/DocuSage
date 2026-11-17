@@ -5,6 +5,9 @@ Unit tests for src/core/security.py — no DB, no FastAPI.
 Pure function tests with maximum coverage.
 """
 
+import base64
+import json
+
 import pytest
 
 from src.core.exceptions import TokenExpiredError, TokenInvalidError
@@ -79,6 +82,32 @@ class TestAccessToken:
         token = create_access_token(USER_ID, SECRET, ALGO, expires_minutes=-1)
         with pytest.raises(TokenExpiredError):
             decode_token(token, SECRET, ALGO)
+
+    def test_unsigned_token_raises(self):
+        """A token with alg "none" and no signature must never be accepted."""
+
+        def part(obj: dict) -> str:
+            raw = json.dumps(obj).encode()
+            return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+        token = (
+            part({"alg": "none", "typ": "JWT"})
+            + "."
+            + part({"sub": USER_ID, "type": ACCESS_TOKEN_TYPE, "exp": 9999999999})
+            + "."
+        )
+        with pytest.raises(TokenInvalidError):
+            decode_token(token, SECRET, ALGO)
+
+    def test_other_algorithm_raises(self):
+        """Only the configured algorithm is accepted, even with the right key."""
+        token = create_access_token(USER_ID, SECRET, "HS512", 30)
+        with pytest.raises(TokenInvalidError):
+            decode_token(token, SECRET, ALGO)
+
+    def test_malformed_token_raises(self):
+        with pytest.raises(TokenInvalidError):
+            decode_token("not-a-jwt", SECRET, ALGO)
 
 
 class TestRefreshToken:
