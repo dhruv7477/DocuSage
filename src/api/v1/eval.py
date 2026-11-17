@@ -18,7 +18,7 @@ import uuid
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field
 
-from src.dependencies import get_current_user
+from src.dependencies import require_admin
 from src.models.user import User
 from src.providers.embedding.factory import get_embedding_provider
 from src.providers.llm.factory import get_llm_provider
@@ -97,11 +97,11 @@ def _get_eval_service() -> EvalService:
     "/run",
     response_model=EvalResultResponse,
     status_code=status.HTTP_200_OK,
-    summary="Evaluate a single Q&A pair with RAGAS-style metrics",
+    summary="Evaluate a single Q&A pair with RAGAS-style metrics (admin only)",
 )
 async def run_eval(
     payload: EvalRunRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     eval_service: EvalService = Depends(_get_eval_service),
 ) -> EvalResultResponse:
     """
@@ -124,11 +124,11 @@ async def run_eval(
     "/suite",
     response_model=EvalSuiteResponse,
     status_code=status.HTTP_200_OK,
-    summary="Run evaluation suite on a batch of Q&A pairs",
+    summary="Run evaluation suite on a batch of Q&A pairs (admin only)",
 )
 async def run_eval_suite(
     payload: EvalSuiteRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     eval_service: EvalService = Depends(_get_eval_service),
 ) -> EvalSuiteResponse:
     """

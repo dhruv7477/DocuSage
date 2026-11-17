@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
+from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy import text
 
@@ -39,6 +40,21 @@ from src.configs.config import get_settings
 from src.core.logger import get_logger
 
 log = get_logger(__name__)
+
+
+def redact_url(url: str) -> str:
+    """Drop the user and password from a URL, e.g. redis://:secret@redis:6379/0.
+
+    Probe details go to logs and to /health/deep, so they must never carry
+    credentials.
+    """
+    parts = urlsplit(url)
+    if parts.username is None and parts.password is None:
+        return url
+    host = parts.hostname or ""
+    if parts.port:
+        host = f"{host}:{parts.port}"
+    return urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))
 
 
 @dataclass
@@ -132,7 +148,7 @@ async def _probe_redis(timeout: float) -> ProbeResult:
             ok=False,
             required=True,
             detail=(
-                f"Cannot reach Redis at {settings.redis_url}. "
+                f"Cannot reach Redis at {redact_url(settings.redis_url)}. "
                 "Start Redis (e.g. `docker compose up redis`). "
                 f"({type(exc).__name__})"
             ),
@@ -161,7 +177,7 @@ async def _probe_qdrant(timeout: float) -> ProbeResult:
             ok=False,
             required=True,
             detail=(
-                f"Cannot reach Qdrant at {settings.qdrant_url}. "
+                f"Cannot reach Qdrant at {redact_url(settings.qdrant_url)}. "
                 "Start Qdrant (e.g. `docker compose up qdrant`). "
                 f"({type(exc).__name__})"
             ),

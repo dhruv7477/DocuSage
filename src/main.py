@@ -37,6 +37,9 @@ from src.db.session import AsyncSessionLocal
 settings = get_settings()
 log = get_logger(__name__)
 
+# Client addresses treated as "this host" (the API container itself).
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
 
 # ── Lifespan ──────────────────────────────────────────────────────
 
@@ -352,9 +355,18 @@ def _register_routers(app: FastAPI) -> None:
     # Deep readiness — runs every dependency probe on demand. Returns
     # 200 when everything required is healthy, 503 otherwise. Use this
     # from CI smoke tests, k8s readinessProbe, and ops dashboards.
+    # Only callers on this host may see it (provider, model and bucket
+    # names), unless HEALTH_DEEP_PUBLIC=true. Through the demo's proxy the
+    # path is not exposed at all.
     @app.get("/health/deep", tags=["Health"], include_in_schema=False)
-    async def health_deep() -> JSONResponse:
+    async def health_deep(request: Request) -> JSONResponse:
         from src.core.readiness import run_readiness_checks
+
+        client_host = request.client.host if request.client else ""
+        if not settings.health_deep_public and client_host not in _LOOPBACK_HOSTS:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND, content={"detail": "Not Found"}
+            )
 
         report = await run_readiness_checks()
         return JSONResponse(
