@@ -229,8 +229,30 @@ class Settings(BaseSettings):
     google_client_id: str = ""
 
     # ── Rate Limiting ────────────────────────────────────────────
+    # Limits use the `limits` notation ("5/hour", "10/minute"). Auth limits
+    # are per client IP; the others are per signed-in user.
+    rate_limit_enabled: bool = True
+    # "memory://" is per process. Use a redis:// URI when more than one
+    # process serves the API, so all of them share one count.
+    rate_limit_storage_uri: str = "memory://"
     rate_limit_per_minute: int = 60
     rate_limit_chat_per_minute: int = 20
+    rate_limit_register: str = "5/hour"
+    rate_limit_auth: str = "10/minute"
+    rate_limit_chat_create: str = "30/hour"
+    rate_limit_upload: str = "20/hour"
+    rate_limit_page_image: str = "120/minute"
+    rate_limit_member_add: str = "20/hour"
+
+    # ── Quotas (0 = unlimited; admins are exempt) ────────────────
+    quota_max_documents: int = Field(default=0, ge=0)
+    quota_max_upload_mb: int = Field(default=0, ge=0)
+    quota_questions_per_day: int = Field(default=0, ge=0)
+
+    # /health/deep lists infrastructure details. By default only clients on
+    # the same host (127.0.0.1) may call it, for example
+    # `docker compose exec api curl localhost:8000/health/deep`.
+    health_deep_public: bool = False
 
     # ── Observability ────────────────────────────────────────────
     sentry_dsn: str = ""

@@ -25,13 +25,13 @@ from src.core.exceptions import (
     DocumentNotFoundError,
     FileTooLargeError,
     UnsupportedFileTypeError,
-    WorkspaceAccessDeniedError,
 )
 from src.core.logger import get_logger
 from src.ingestion.parsers.registry import ParserRegistry
 from src.models.document import Document, DocumentStatus, DocumentType
 from src.models.user import User
-from src.models.workspace import WorkspaceMember
+from src.services.membership import assert_workspace_member
+from src.services.quota_service import QuotaService
 from src.services.storage_service import StorageService
 
 log = get_logger(__name__)
@@ -52,9 +52,16 @@ _EXT_TO_TYPE: dict[str, DocumentType] = {
 
 
 class DocumentService:
-    def __init__(self, db: AsyncSession, storage: StorageService) -> None:
+    def __init__(
+        self,
+        db: AsyncSession,
+        storage: StorageService,
+        quota: QuotaService | None = None,
+    ) -> None:
         self._db = db
         self._storage = storage
+        # Upload quotas apply only where a QuotaService is passed in (the API).
+        self._quota = quota
 
     # ── Upload ────────────────────────────────────────────────────
 
@@ -84,6 +91,7 @@ class DocumentService:
             WorkspaceAccessDeniedError: user not a member
             UnsupportedFileTypeError:   file extension not supported
             FileTooLargeError:          exceeds 50MB limit
+            QuotaExceededError:         document or storage quota used up
         """
         # Validate workspace membership
         await self._assert_workspace_member(workspace_id, user.id)
@@ -112,6 +120,13 @@ class DocumentService:
             )
         )
         existing = existing_result.scalar_one_or_none()
+
+        if self._quota is not None:
+            await self._quota.check_upload(
+                user,
+                new_bytes=len(content),
+                replaces_bytes=existing.file_size_bytes if existing else None,
+            )
 
         if existing is not None:
             doc_id = existing.id
@@ -266,11 +281,4 @@ class DocumentService:
     async def _assert_workspace_member(
         self, workspace_id: uuid.UUID, user_id: uuid.UUID
     ) -> None:
-        result = await self._db.execute(
-            select(WorkspaceMember).where(
-                WorkspaceMember.workspace_id == workspace_id,
-                WorkspaceMember.user_id == user_id,
-            )
-        )
-        if not result.scalar_one_or_none():
-            raise WorkspaceAccessDeniedError("You are not a member of this workspace.")
+        await assert_workspace_member(self._db, workspace_id, user_id)
