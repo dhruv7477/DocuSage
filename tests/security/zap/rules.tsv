@@ -1,0 +1,7 @@
+# OWASP ZAP rule configuration for the DAST job (.github/workflows/security.yml),
+# passed to zap-baseline.py and zap-api-scan.py with -c.
+#
+# Format: <rule id><TAB><IGNORE|WARN|FAIL><TAB>(<reason>)
+# Only IGNORE entries live here, each with the reason it does not apply.
+# Everything else is reported, and scripts/security/zap_report.py fails the
+# job on any High risk alert.
