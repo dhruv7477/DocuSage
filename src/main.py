@@ -269,6 +269,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except (asyncio.CancelledError, Exception):
             pass
 
+    # Close pooled database connections on the loop that opened them. A
+    # pooled asyncpg connection cannot be reused from another event loop,
+    # which is what a second app instance in the same process would do.
+    from src.db.session import engine
+
+    await engine.dispose()
+
 
 # ── App Factory ───────────────────────────────────────────────────
 
