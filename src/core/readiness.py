@@ -327,7 +327,9 @@ async def run_readiness_checks(*, timeout: float | None = None) -> ReadinessRepo
     # first call may load a multi-hundred-MB sentence-transformers model.
     embedder_timeout = max(t, 30.0)
 
-    log.info("readiness_gather_start", probe_timeout=t, embedder_timeout=embedder_timeout)
+    log.info(
+        "readiness_gather_start", probe_timeout=t, embedder_timeout=embedder_timeout
+    )
     probes: list[ProbeResult] = await asyncio.gather(
         _probe_postgres(t),
         _probe_redis(t),

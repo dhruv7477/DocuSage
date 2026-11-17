@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 # ── Request Schemas ───────────────────────────────────────────────
 
+
 class CreateWorkspaceRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=500)
@@ -32,6 +33,7 @@ class UpdateMemberRoleRequest(BaseModel):
 
 
 # ── Response Schemas ─────────────────────────────────────────────
+
 
 class WorkspaceMemberResponse(BaseModel):
     id: uuid.UUID
@@ -60,4 +62,5 @@ class WorkspaceResponse(BaseModel):
 
 class WorkspaceDetailResponse(WorkspaceResponse):
     """Extended response including member list — for workspace detail page."""
+
     members: list[WorkspaceMemberResponse] = []

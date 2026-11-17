@@ -14,6 +14,7 @@ from src.core.rate_limit import chat_limit, default_limit
 
 # ── _resolve_action ───────────────────────────────────────────────
 
+
 class TestResolveAction:
     def test_skips_health(self):
         assert _resolve_action("GET", "/health") is None
@@ -39,7 +40,9 @@ class TestResolveAction:
         assert _resolve_action("POST", "/api/v1/documents/upload") == "document.upload"
 
     def test_maps_document_delete(self):
-        assert _resolve_action("DELETE", "/api/v1/documents/abc-123") == "document.delete"
+        assert (
+            _resolve_action("DELETE", "/api/v1/documents/abc-123") == "document.delete"
+        )
 
     def test_maps_chat_query(self):
         assert _resolve_action("POST", "/api/v1/chat/abc/query") == "chat.query"
@@ -51,7 +54,9 @@ class TestResolveAction:
         assert _resolve_action("GET", "/api/v1/admin/users") == "admin.read"
 
     def test_maps_admin_update(self):
-        assert _resolve_action("PATCH", "/api/v1/admin/users/abc") == "admin.update_user"
+        assert (
+            _resolve_action("PATCH", "/api/v1/admin/users/abc") == "admin.update_user"
+        )
 
     def test_unmapped_post_gets_fallback(self):
         action = _resolve_action("POST", "/api/v1/unknown/endpoint")
@@ -62,6 +67,7 @@ class TestResolveAction:
 
 
 # ── _get_client_ip ────────────────────────────────────────────────
+
 
 class TestGetClientIp:
     def _make_request(self, forwarded_for=None, client_host=None):
@@ -95,6 +101,7 @@ class TestGetClientIp:
 
 
 # ── Rate limit string helpers ─────────────────────────────────────
+
 
 class TestRateLimitHelpers:
     def test_default_limit_format(self):

@@ -51,6 +51,7 @@ settings = get_settings()
 @dataclass
 class CitedSource:
     """A document chunk that contributed to the answer."""
+
     document_id: str
     chunk_id: str
     source_filename: str
@@ -66,6 +67,7 @@ class CitedSource:
 @dataclass
 class RAGResponse:
     """Complete non-streaming response from the RAG pipeline."""
+
     answer: str
     sources: list[CitedSource] = field(default_factory=list)
     context_chunks_used: int = 0
@@ -77,6 +79,7 @@ class RAGResponse:
 @dataclass
 class _RetrievalOutcome:
     """Internal: results carried through to the prompt-building step."""
+
     results: list[SearchResult]
     confidence: float
     enrichment: QueryEnrichment
@@ -118,7 +121,8 @@ class RAGService:
         )
         self._reranker = reranker or NoOpReranker()
         self._query_understanding = query_understanding or QueryUnderstanding(
-            llm=llm, enable_hyde=settings.enable_hyde,
+            llm=llm,
+            enable_hyde=settings.enable_hyde,
         )
         self._top_k = top_k or settings.rag_top_k
         self._abstention_threshold = (
@@ -164,7 +168,8 @@ class RAGService:
             raise
         except Exception as exc:
             raise LLMProviderError(
-                "LLM generation failed.", detail=str(exc),
+                "LLM generation failed.",
+                detail=str(exc),
             ) from exc
 
         sources = _extract_sources(outcome.results)
@@ -246,7 +251,8 @@ class RAGService:
             raise
         except Exception as exc:
             raise LLMProviderError(
-                "LLM streaming failed.", detail=str(exc),
+                "LLM streaming failed.",
+                detail=str(exc),
             ) from exc
 
     async def prepare_stream(
@@ -309,7 +315,8 @@ class RAGService:
                 raise
             except Exception as exc:
                 raise LLMProviderError(
-                    "LLM streaming failed.", detail=str(exc),
+                    "LLM streaming failed.",
+                    detail=str(exc),
                 ) from exc
 
         return outcome, _token_iter()
@@ -406,10 +413,7 @@ class RAGService:
         )
 
     def _is_abstaining(self, outcome: _RetrievalOutcome) -> bool:
-        return (
-            not outcome.results
-            or outcome.confidence < self._abstention_threshold
-        )
+        return not outcome.results or outcome.confidence < self._abstention_threshold
 
 
 def _results_to_cited(results: list[SearchResult]) -> list[CitedSource]:

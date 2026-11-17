@@ -87,6 +87,7 @@ def _build_llm_provider(model: str) -> BaseLLMProvider:
 
     if provider == "ollama":
         from src.providers.llm.ollama_provider import OllamaProvider
+
         return OllamaProvider(
             base_url=settings.ollama_base_url,
             model=model,
@@ -95,6 +96,7 @@ def _build_llm_provider(model: str) -> BaseLLMProvider:
 
     if provider == "vllm":
         from src.providers.llm.vllm_provider import VLLMProvider
+
         return VLLMProvider(
             base_url=settings.vllm_base_url,
             api_key=settings.vllm_api_key,
@@ -104,6 +106,7 @@ def _build_llm_provider(model: str) -> BaseLLMProvider:
 
     if provider == "openai":
         from src.providers.llm.openai_provider import OpenAIProvider
+
         return OpenAIProvider(
             api_key=settings.openai_api_key,
             model=model,

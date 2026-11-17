@@ -23,7 +23,6 @@ Collection configuration
   remediation hint, instead of silently accepting partial data.
 """
 
-
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qmodels
 from qdrant_client.http.exceptions import UnexpectedResponse
@@ -43,11 +42,10 @@ settings = get_settings()
 
 
 class QdrantVectorStore(BaseVectorStore):
-
     def __init__(self, url: str, api_key: str = "") -> None:
         self._client = AsyncQdrantClient(
             url=url,
-            api_key=api_key or None,   # None disables auth (local dev)
+            api_key=api_key or None,  # None disables auth (local dev)
             timeout=30,
         )
 
@@ -196,18 +194,18 @@ class QdrantVectorStore(BaseVectorStore):
                 id=cid,
                 vector=vec,
                 payload={
-                    "user_id":       p.user_id,        # ★ Isolation key
-                    "workspace_id":  p.workspace_id,
-                    "document_id":   p.document_id,
-                    "chunk_index":   p.chunk_index,
-                    "text":          p.text,
-                    "source":        p.source,
-                    "page_number":   p.page_number,
-                    "chunk_total":   p.chunk_total,
-                    "heading_path":  list(p.heading_path),
-                    "char_start":    p.char_start,
-                    "char_end":      p.char_end,
-                    "token_count":   p.token_count,
+                    "user_id": p.user_id,  # ★ Isolation key
+                    "workspace_id": p.workspace_id,
+                    "document_id": p.document_id,
+                    "chunk_index": p.chunk_index,
+                    "text": p.text,
+                    "source": p.source,
+                    "page_number": p.page_number,
+                    "chunk_total": p.chunk_total,
+                    "heading_path": list(p.heading_path),
+                    "char_start": p.char_start,
+                    "char_end": p.char_end,
+                    "token_count": p.token_count,
                     "prev_chunk_id": p.prev_chunk_id,
                     "next_chunk_id": p.next_chunk_id,
                 },

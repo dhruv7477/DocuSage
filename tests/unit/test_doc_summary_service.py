@@ -66,7 +66,6 @@ def _service(store, llm, **overrides) -> DocSummaryService:
 
 
 class TestSinglePass:
-
     @pytest.mark.asyncio
     async def test_small_doc_skips_map_phase(self):
         store = AsyncMock()
@@ -117,7 +116,6 @@ class TestSinglePass:
 
 
 class TestMapReduce:
-
     @pytest.mark.asyncio
     async def test_medium_doc_streams_single_pass_below_context_budget(self):
         # A doc larger than the per-segment map budget but within the
@@ -151,8 +149,11 @@ class TestMapReduce:
         ]
         llm = _mock_llm()
         await _service(
-            store, llm,
-            context_budget=500, map_token_budget=500, timeout_seconds=123,
+            store,
+            llm,
+            context_budget=500,
+            map_token_budget=500,
+            timeout_seconds=123,
         ).prepare_summary_stream(
             workspace_id=uuid.uuid4(),
             user=_make_user(),
@@ -187,9 +188,7 @@ class TestMapReduce:
     @pytest.mark.asyncio
     async def test_chunk_truncation_guard(self):
         store = AsyncMock()
-        store.list_document_chunks.return_value = [
-            _chunk("text", i) for i in range(10)
-        ]
+        store.list_document_chunks.return_value = [_chunk("text", i) for i in range(10)]
         outcome, _ = await _service(
             store, _mock_llm(), max_total_chunks=5
         ).prepare_summary_stream(
@@ -203,7 +202,6 @@ class TestMapReduce:
 
 
 class TestPackSegments:
-
     def test_segments_respect_budget(self):
         paragraphs = "\n\n".join(["word " * 100] * 10)  # ~100 tokens each
         segments = _pack_segments([paragraphs], budget=250)
@@ -211,6 +209,7 @@ class TestPackSegments:
         # No segment may grossly exceed the budget (a single paragraph
         # over budget is allowed — chunks are never split).
         from src.services.prompt_builder import count_tokens
+
         for seg in segments:
             assert count_tokens(seg) <= 250 + 110
 

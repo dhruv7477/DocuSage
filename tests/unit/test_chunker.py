@@ -15,7 +15,9 @@ from src.ingestion.chunker import RecursiveChunker, SemanticChunker, TextChunk
 from src.ingestion.parsers.base import ParsedBlock, ParsedDocument
 
 
-def _para(text: str, page: int = 1, char_start: int = 0, heading_path: list[str] | None = None) -> ParsedBlock:
+def _para(
+    text: str, page: int = 1, char_start: int = 0, heading_path: list[str] | None = None
+) -> ParsedBlock:
     return ParsedBlock(
         text=text,
         block_type="paragraph",
@@ -26,7 +28,13 @@ def _para(text: str, page: int = 1, char_start: int = 0, heading_path: list[str]
     )
 
 
-def _heading(text: str, level: int, page: int = 1, char_start: int = 0, heading_path: list[str] | None = None) -> ParsedBlock:
+def _heading(
+    text: str,
+    level: int,
+    page: int = 1,
+    char_start: int = 0,
+    heading_path: list[str] | None = None,
+) -> ParsedBlock:
     return ParsedBlock(
         text=text,
         block_type="heading",
@@ -47,7 +55,6 @@ def _make_doc(text: str, filename: str = "test.txt") -> ParsedDocument:
 
 
 class TestSemanticChunker:
-
     def test_short_text_is_single_chunk(self):
         chunker = SemanticChunker(chunk_tokens=200, overlap_tokens=40)
         doc = _make_doc("This is a short document.")
@@ -110,9 +117,19 @@ class TestSemanticChunker:
             filename="t.md",
             blocks=[
                 _heading("Section A", level=1, page=1, char_start=0, heading_path=[]),
-                _para("Body of section A.", page=1, char_start=10, heading_path=["Section A"]),
+                _para(
+                    "Body of section A.",
+                    page=1,
+                    char_start=10,
+                    heading_path=["Section A"],
+                ),
                 _heading("Section B", level=1, page=2, char_start=30, heading_path=[]),
-                _para("Body of section B.", page=2, char_start=40, heading_path=["Section B"]),
+                _para(
+                    "Body of section B.",
+                    page=2,
+                    char_start=40,
+                    heading_path=["Section B"],
+                ),
             ],
             total_pages=2,
         )
@@ -131,7 +148,12 @@ class TestSemanticChunker:
             filename="t.md",
             blocks=[
                 _heading("Refunds", level=1, page=1, char_start=0),
-                _para("All refunds processed within 30 days.", page=1, char_start=10, heading_path=["Refunds"]),
+                _para(
+                    "All refunds processed within 30 days.",
+                    page=1,
+                    char_start=10,
+                    heading_path=["Refunds"],
+                ),
             ],
             total_pages=1,
         )

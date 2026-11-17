@@ -13,7 +13,6 @@ from src.ingestion.parsers.text_parser import HTMLParser, TextParser
 
 
 class TestParserRegistry:
-
     def test_get_pdf_parser(self):
         parser = ParserRegistry.get("report.pdf")
         assert ".pdf" in parser.supported_extensions
@@ -55,7 +54,6 @@ class TestParserRegistry:
 
 
 class TestTextParser:
-
     @pytest.mark.asyncio
     async def test_parse_plain_text(self):
         content = b"Hello world. This is a test document."
@@ -96,7 +94,6 @@ class TestTextParser:
 
 
 class TestHTMLParser:
-
     @pytest.mark.asyncio
     async def test_strips_html_tags(self):
         content = b"<html><body><h1>Title</h1><p>Body text here.</p></body></html>"

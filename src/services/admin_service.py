@@ -40,6 +40,7 @@ log = get_logger(__name__)
 
 # ── Response dataclasses ──────────────────────────────────────────
 
+
 @dataclass
 class UserAdminView:
     id: str
@@ -133,17 +134,21 @@ class AdminService:
         for user in users:
             ws_count = await self._count_user_workspaces(user.id)
             doc_count = await self._count_user_documents(user.id)
-            views.append(UserAdminView(
-                id=str(user.id),
-                email=user.email,
-                full_name=user.full_name,
-                role=user.role.value if hasattr(user.role, "value") else str(user.role),
-                is_active=user.is_active,
-                is_email_verified=user.is_email_verified,
-                created_at=user.created_at,
-                workspace_count=ws_count,
-                document_count=doc_count,
-            ))
+            views.append(
+                UserAdminView(
+                    id=str(user.id),
+                    email=user.email,
+                    full_name=user.full_name,
+                    role=user.role.value
+                    if hasattr(user.role, "value")
+                    else str(user.role),
+                    is_active=user.is_active,
+                    is_email_verified=user.is_email_verified,
+                    created_at=user.created_at,
+                    workspace_count=ws_count,
+                    document_count=doc_count,
+                )
+            )
 
         return views, total
 
@@ -186,9 +191,7 @@ class AdminService:
             )
 
         if role == UserRole.SUPER_ADMIN.value:
-            raise InsufficientPermissionsError(
-                "Cannot promote to SUPER_ADMIN via API."
-            )
+            raise InsufficientPermissionsError("Cannot promote to SUPER_ADMIN via API.")
 
         user = await self._fetch_user(user_id)
 
@@ -227,9 +230,13 @@ class AdminService:
         total_messages = await self._scalar(select(func.count(Message.id)))
 
         # Documents grouped by status
-        status_rows = (await self._db.execute(
-            select(Document.status, func.count(Document.id)).group_by(Document.status)
-        )).all()
+        status_rows = (
+            await self._db.execute(
+                select(Document.status, func.count(Document.id)).group_by(
+                    Document.status
+                )
+            )
+        ).all()
         documents_by_status = {
             (row[0].value if hasattr(row[0], "value") else str(row[0])): row[1]
             for row in status_rows
@@ -288,13 +295,12 @@ class AdminService:
 
     async def get_audit_log(self, log_id: int) -> AuditLogView:
         """Fetch a single audit log entry by integer ID."""
-        result = await self._db.execute(
-            select(AuditLog).where(AuditLog.id == log_id)
-        )
+        result = await self._db.execute(select(AuditLog).where(AuditLog.id == log_id))
         entry = result.scalar_one_or_none()
         if not entry:
             from src.core.exceptions import PrivateAIException
             from http import HTTPStatus
+
             raise PrivateAIException(
                 message=f"Audit log {log_id} not found.",
                 status_code=HTTPStatus.NOT_FOUND.value,
@@ -305,9 +311,7 @@ class AdminService:
     # ── Private helpers ───────────────────────────────────────────
 
     async def _fetch_user(self, user_id: uuid.UUID) -> User:
-        result = await self._db.execute(
-            select(User).where(User.id == user_id)
-        )
+        result = await self._db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
         if not user:
             raise UserNotFoundError(f"User {user_id} not found.")

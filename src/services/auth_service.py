@@ -107,7 +107,11 @@ class AuthService:
 
         # Use same error for "not found" and "wrong password" — prevents
         # user enumeration attacks via timing or error message differences
-        if not user or not user.password_hash or not verify_password(payload.password, user.password_hash):
+        if (
+            not user
+            or not user.password_hash
+            or not verify_password(payload.password, user.password_hash)
+        ):
             raise AuthenticationError(
                 "Invalid email or password.",
                 detail="Please check your credentials and try again.",
@@ -195,6 +199,7 @@ class AuthService:
             UserNotFoundError / UserInactiveError if account changed
         """
         from datetime import UTC, datetime
+
         payload = decode_token(
             refresh_token,
             settings.secret_key,
@@ -206,6 +211,7 @@ class AuthService:
         jti = payload.get("jti")
         if jti:
             from src.core.token_blacklist import is_token_blacklisted
+
             if await is_token_blacklisted(jti):
                 raise TokenInvalidError("Refresh token has already been used.")
             exp = payload.get("exp")
@@ -240,7 +246,9 @@ class AuthService:
         if not tracked_user:
             raise AuthenticationError("Current password is incorrect.")
 
-        if not tracked_user.password_hash or not verify_password(current_password, tracked_user.password_hash):
+        if not tracked_user.password_hash or not verify_password(
+            current_password, tracked_user.password_hash
+        ):
             raise AuthenticationError("Current password is incorrect.")
 
         tracked_user.password_hash = hash_password(new_password)
@@ -252,6 +260,7 @@ class AuthService:
     async def logout(self, token: str) -> None:
         """Blacklist the access token so it cannot be used after logout."""
         from datetime import UTC, datetime
+
         try:
             payload = decode_token(token, settings.secret_key, settings.algorithm)
         except Exception:
@@ -275,9 +284,7 @@ class AuthService:
             TokenExpiredError / TokenInvalidError
             UserNotFoundError / UserInactiveError
         """
-        payload = decode_token(
-            token, settings.secret_key, settings.algorithm
-        )
+        payload = decode_token(token, settings.secret_key, settings.algorithm)
         user_id = extract_user_id(payload)
         user = await self._get_user_by_id(uuid.UUID(user_id))
 
@@ -312,13 +319,9 @@ class AuthService:
         )
 
     async def _get_user_by_email(self, email: str) -> User | None:
-        result = await self._db.execute(
-            select(User).where(User.email == email.lower())
-        )
+        result = await self._db.execute(select(User).where(User.email == email.lower()))
         return result.scalar_one_or_none()
 
     async def _get_user_by_id(self, user_id: uuid.UUID) -> User | None:
-        result = await self._db.execute(
-            select(User).where(User.id == user_id)
-        )
+        result = await self._db.execute(select(User).where(User.id == user_id))
         return result.scalar_one_or_none()

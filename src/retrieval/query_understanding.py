@@ -91,9 +91,10 @@ class QueryEnrichment:
     *always* preserved in `original` so the BM25 / lexical branch can
     use the user's actual wording.
     """
+
     original: str
-    standalone: str           # Same as `original` if no rewrite happened
-    queries: list[str]        # 1+ queries to embed (HyDE adds a synthetic doc)
+    standalone: str  # Same as `original` if no rewrite happened
+    queries: list[str]  # 1+ queries to embed (HyDE adds a synthetic doc)
     rewritten: bool
     used_hyde: bool
 

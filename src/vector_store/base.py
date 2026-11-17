@@ -30,14 +30,15 @@ class VectorPayload:
     - Walk neighbouring chunks via prev_chunk_id / next_chunk_id when
       we need extra context for an answer
     """
-    user_id: str           # ★ ISOLATION KEY — every search MUST filter on this
+
+    user_id: str  # ★ ISOLATION KEY — every search MUST filter on this
     workspace_id: str
     document_id: str
     chunk_index: int
-    text: str              # The actual chunk text, stored for prompt building
-    source: str            # Original filename
+    text: str  # The actual chunk text, stored for prompt building
+    source: str  # Original filename
     page_number: int = 0
-    chunk_total: int = 0   # Total chunks in the document (for context)
+    chunk_total: int = 0  # Total chunks in the document (for context)
     heading_path: list[str] = field(default_factory=list)
     char_start: int = 0
     char_end: int = 0
@@ -49,8 +50,9 @@ class VectorPayload:
 @dataclass
 class SearchResult:
     """A single result from a similarity search."""
+
     chunk_id: str
-    score: float           # Cosine similarity 0.0–1.0
+    score: float  # Cosine similarity 0.0–1.0
     payload: VectorPayload
 
 
@@ -60,9 +62,12 @@ class SearchFilter:
     Explicit filter passed to every search.
     Having this as a typed object prevents accidentally omitting user_id.
     """
-    user_id: str           # REQUIRED — never search without this
-    workspace_id: str      # REQUIRED — tenant isolation
-    document_ids: list[str] = field(default_factory=list)  # Optional: search within specific docs
+
+    user_id: str  # REQUIRED — never search without this
+    workspace_id: str  # REQUIRED — tenant isolation
+    document_ids: list[str] = field(
+        default_factory=list
+    )  # Optional: search within specific docs
 
 
 class BaseVectorStore(ABC):

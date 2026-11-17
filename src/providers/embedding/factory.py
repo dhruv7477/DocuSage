@@ -42,6 +42,7 @@ def get_embedding_provider() -> BaseEmbeddingProvider:
 
     if provider == "bge":
         from src.providers.embedding.bge_provider import BGEProvider
+
         return BGEProvider(
             model_name=settings.embedding_model,
             device=settings.embedding_device,
@@ -56,14 +57,14 @@ def get_embedding_provider() -> BaseEmbeddingProvider:
 
     if provider == "openai":
         from src.providers.embedding.openai_embed import OpenAIEmbeddingProvider
+
         return OpenAIEmbeddingProvider(
             api_key=settings.openai_api_key,
             model=settings.openai_embed_model,
         )
 
     raise ValueError(
-        f"Unsupported EMBEDDING_PROVIDER='{provider}'. "
-        "Valid options: bge | openai"
+        f"Unsupported EMBEDDING_PROVIDER='{provider}'. " "Valid options: bge | openai"
     )
 
 

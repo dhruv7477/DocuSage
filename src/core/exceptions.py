@@ -34,31 +34,37 @@ class PrivateAIException(Exception):
 
 # ── Auth Exceptions ──────────────────────────────────────────────
 
+
 class AuthenticationError(PrivateAIException):
     """Invalid credentials or expired token."""
+
     status_code = HTTPStatus.UNAUTHORIZED.value
     error_code = "AUTHENTICATION_FAILED"
 
 
 class TokenExpiredError(PrivateAIException):
     """JWT token has expired."""
+
     status_code = HTTPStatus.UNAUTHORIZED.value
     error_code = "TOKEN_EXPIRED"
 
 
 class TokenInvalidError(PrivateAIException):
     """JWT token is malformed or tampered."""
+
     status_code = HTTPStatus.UNAUTHORIZED.value
     error_code = "TOKEN_INVALID"
 
 
 class InsufficientPermissionsError(PrivateAIException):
     """User lacks required role/permission for this action."""
+
     status_code = HTTPStatus.FORBIDDEN.value
     error_code = "INSUFFICIENT_PERMISSIONS"
 
 
 # ── User Exceptions ──────────────────────────────────────────────
+
 
 class UserNotFoundError(PrivateAIException):
     status_code = HTTPStatus.NOT_FOUND.value
@@ -77,6 +83,7 @@ class UserInactiveError(PrivateAIException):
 
 # ── Workspace Exceptions ─────────────────────────────────────────
 
+
 class WorkspaceNotFoundError(PrivateAIException):
     status_code = HTTPStatus.NOT_FOUND.value
     error_code = "WORKSPACE_NOT_FOUND"
@@ -84,6 +91,7 @@ class WorkspaceNotFoundError(PrivateAIException):
 
 class WorkspaceAccessDeniedError(PrivateAIException):
     """User is not a member of this workspace."""
+
     status_code = HTTPStatus.FORBIDDEN.value
     error_code = "WORKSPACE_ACCESS_DENIED"
 
@@ -95,6 +103,7 @@ class WorkspaceLimitReachedError(PrivateAIException):
 
 # ── Document Exceptions ──────────────────────────────────────────
 
+
 class DocumentNotFoundError(PrivateAIException):
     status_code = HTTPStatus.NOT_FOUND.value
     error_code = "DOCUMENT_NOT_FOUND"
@@ -102,6 +111,7 @@ class DocumentNotFoundError(PrivateAIException):
 
 class DocumentAccessDeniedError(PrivateAIException):
     """User does not own this document."""
+
     status_code = HTTPStatus.FORBIDDEN.value
     error_code = "DOCUMENT_ACCESS_DENIED"
 
@@ -123,6 +133,7 @@ class DocumentProcessingError(PrivateAIException):
 
 # ── Chat Exceptions ──────────────────────────────────────────────
 
+
 class ChatNotFoundError(PrivateAIException):
     status_code = HTTPStatus.NOT_FOUND.value
     error_code = "CHAT_NOT_FOUND"
@@ -134,6 +145,7 @@ class ChatAccessDeniedError(PrivateAIException):
 
 
 # ── Infrastructure Exceptions ────────────────────────────────────
+
 
 class VectorStoreError(PrivateAIException):
     status_code = HTTPStatus.INTERNAL_SERVER_ERROR.value
@@ -162,6 +174,7 @@ class EmbeddingDimensionMismatch(VectorStoreError):
     most commonly when `EMBEDDING_MODEL` is changed without reindexing.
     The detail message includes the remediation script command.
     """
+
     error_code = "EMBEDDING_DIMENSION_MISMATCH"
 
 

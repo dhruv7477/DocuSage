@@ -109,7 +109,7 @@ class TextParser(BaseParser):
                             heading_level=level,
                         )
                     )
-                i += 3   # heading_open, inline, heading_close
+                i += 3  # heading_open, inline, heading_close
                 continue
 
             if tok.type == "paragraph_open":
@@ -141,7 +141,9 @@ class TextParser(BaseParser):
                         depth -= 1
                         if depth == 0:
                             break
-                    elif tokens[j].type == "inline" and tokens[j].level == tok.level + 2:
+                    elif (
+                        tokens[j].type == "inline" and tokens[j].level == tok.level + 2
+                    ):
                         item_text = tokens[j].content.strip()
                         if item_text:
                             start, end, cursor = _advance_cursor(cursor, item_text)
@@ -233,9 +235,7 @@ class HTMLParser(BaseParser):
     async def parse(self, content: bytes, filename: str) -> ParsedDocument:
         loop = asyncio.get_event_loop()
         try:
-            return await loop.run_in_executor(
-                None, self._parse_sync, content, filename
-            )
+            return await loop.run_in_executor(None, self._parse_sync, content, filename)
         except DocumentProcessingError:
             raise
         except Exception as exc:
@@ -339,10 +339,12 @@ class HTMLParser(BaseParser):
             elif name == "table":
                 rows = []
                 for tr in tag.find_all("tr"):
-                    rows.append([
-                        cell.get_text(" ", strip=True)
-                        for cell in tr.find_all(["th", "td"])
-                    ])
+                    rows.append(
+                        [
+                            cell.get_text(" ", strip=True)
+                            for cell in tr.find_all(["th", "td"])
+                        ]
+                    )
                 md = _rows_to_markdown(rows)
                 if md:
                     start, end, cursor = _advance_cursor(cursor, md)

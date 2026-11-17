@@ -44,6 +44,7 @@ def _make_message(role: MessageRole, content: str) -> Message:
     msg.token_count = len(content) // 4
     msg.sources_json = None
     from datetime import datetime, timezone
+
     msg.created_at = datetime.now(timezone.utc)
     return msg
 
@@ -62,7 +63,6 @@ def service(mock_db):
 
 
 class TestGetChat:
-
     @pytest.mark.asyncio
     async def test_returns_chat_for_owner(self, service, mock_db):
         user = _make_user()
@@ -97,7 +97,6 @@ class TestGetChat:
 
 
 class TestLoadHistory:
-
     @pytest.mark.asyncio
     async def test_empty_history_returns_empty(self, service, mock_db):
         result_mock = MagicMock()
@@ -110,7 +109,9 @@ class TestLoadHistory:
     @pytest.mark.asyncio
     async def test_history_returned_as_llm_messages(self, service, mock_db):
         messages = [
-            _make_message(MessageRole.ASSISTANT, "X is Y."),  # newest first (matches DB DESC order)
+            _make_message(
+                MessageRole.ASSISTANT, "X is Y."
+            ),  # newest first (matches DB DESC order)
             _make_message(MessageRole.USER, "What is X?"),
         ]
         result_mock = MagicMock()
@@ -127,8 +128,8 @@ class TestLoadHistory:
     async def test_history_trimmed_by_token_budget(self, service, mock_db):
         # Create messages that exceed token budget
         big_messages = [
-            _make_message(MessageRole.USER, "Q " * 500),     # ~250 tokens
-            _make_message(MessageRole.ASSISTANT, "A " * 500), # ~250 tokens
+            _make_message(MessageRole.USER, "Q " * 500),  # ~250 tokens
+            _make_message(MessageRole.ASSISTANT, "A " * 500),  # ~250 tokens
             _make_message(MessageRole.USER, "Q2 " * 500),
             _make_message(MessageRole.ASSISTANT, "A2 " * 500),
         ]
@@ -144,6 +145,7 @@ class TestLoadHistory:
     @pytest.mark.asyncio
     async def test_system_messages_excluded(self, service, mock_db):
         from src.models.chat import MessageRole
+
         messages = [
             _make_message(MessageRole.SYSTEM, "You are an assistant."),
             _make_message(MessageRole.USER, "Hello"),
@@ -159,7 +161,6 @@ class TestLoadHistory:
 
 
 class TestGenerateTitle:
-
     def test_short_query_unchanged(self):
         title = ChatService.generate_title("What is the refund policy?")
         assert title == "What is the refund policy?"

@@ -19,7 +19,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.configs.config import get_settings
-from src.core.exceptions import InsufficientPermissionsError, TokenInvalidError, UserInactiveError, UserNotFoundError
+from src.core.exceptions import (
+    InsufficientPermissionsError,
+    TokenInvalidError,
+    UserInactiveError,
+    UserNotFoundError,
+)
 from src.core.security import decode_token, extract_user_id
 from src.core.token_blacklist import is_token_blacklisted
 from src.db.session import get_db
@@ -41,7 +46,9 @@ async def get_current_user(
     Decodes JWT, checks blacklist, fetches User from DB, checks is_active.
     Inject into any route that requires authentication.
     """
-    payload = decode_token(credentials.credentials, _settings.secret_key, _settings.algorithm)
+    payload = decode_token(
+        credentials.credentials, _settings.secret_key, _settings.algorithm
+    )
 
     jti = payload.get("jti")
     if jti and await is_token_blacklisted(jti):
@@ -95,4 +102,5 @@ async def require_super_admin(
 def get_auth_service(db: AsyncSession = Depends(get_db)):
     """Dependency factory for AuthService."""
     from src.services.auth_service import AuthService
+
     return AuthService(db)

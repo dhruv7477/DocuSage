@@ -43,7 +43,6 @@ MAX_MESSAGES_FETCH = 20
 
 
 class ChatService:
-
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
 
@@ -74,9 +73,7 @@ class ChatService:
         Raises:
             ChatNotFoundError, ChatAccessDeniedError
         """
-        result = await self._db.execute(
-            select(Chat).where(Chat.id == chat_id)
-        )
+        result = await self._db.execute(select(Chat).where(Chat.id == chat_id))
         chat = result.scalar_one_or_none()
         if not chat:
             raise ChatNotFoundError(f"Chat '{chat_id}' not found.")
@@ -116,9 +113,7 @@ class ChatService:
 
     # ── Message Persistence ───────────────────────────────────────
 
-    async def save_user_message(
-        self, chat_id: uuid.UUID, content: str
-    ) -> Message:
+    async def save_user_message(self, chat_id: uuid.UUID, content: str) -> Message:
         """Persist a user turn to the messages table."""
         return await self._save_message(chat_id, MessageRole.USER, content)
 
@@ -136,20 +131,24 @@ class ChatService:
         # heading paths and (eventually) link to the exact passage on a
         # "view in document" click. The column is JSONB, so additive
         # field changes don't need a migration.
-        sources_list = [
-            {
-                "document_id": s.document_id,
-                "chunk_id": getattr(s, "chunk_id", None),
-                "source": s.source_filename,
-                "page": s.page_number,
-                "score": s.relevance_score,
-                "heading_path": list(getattr(s, "heading_path", []) or []),
-                "char_start": getattr(s, "char_start", 0),
-                "char_end": getattr(s, "char_end", 0),
-                "text": getattr(s, "text", "") or "",
-            }
-            for s in sources
-        ] if sources else None
+        sources_list = (
+            [
+                {
+                    "document_id": s.document_id,
+                    "chunk_id": getattr(s, "chunk_id", None),
+                    "source": s.source_filename,
+                    "page": s.page_number,
+                    "score": s.relevance_score,
+                    "heading_path": list(getattr(s, "heading_path", []) or []),
+                    "char_start": getattr(s, "char_start", 0),
+                    "char_end": getattr(s, "char_end", 0),
+                    "text": getattr(s, "text", "") or "",
+                }
+                for s in sources
+            ]
+            if sources
+            else None
+        )
         return await self._save_message(
             chat_id, MessageRole.ASSISTANT, content, sources_json=sources_list
         )

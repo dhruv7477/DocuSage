@@ -36,7 +36,6 @@ log = get_logger(__name__)
 
 
 class DOCXParser(BaseParser):
-
     @property
     def supported_extensions(self) -> list[str]:
         return [".docx", ".doc"]
@@ -44,9 +43,7 @@ class DOCXParser(BaseParser):
     async def parse(self, content: bytes, filename: str) -> ParsedDocument:
         loop = asyncio.get_event_loop()
         try:
-            return await loop.run_in_executor(
-                None, self._parse_sync, content, filename
-            )
+            return await loop.run_in_executor(None, self._parse_sync, content, filename)
         except DocumentProcessingError:
             raise
         except Exception as exc:
@@ -116,10 +113,7 @@ class DOCXParser(BaseParser):
 
         # ── Tables ────────────────────────────────────────────────
         for table in doc.tables:
-            rows = [
-                [cell.text.strip() for cell in row.cells]
-                for row in table.rows
-            ]
+            rows = [[cell.text.strip() for cell in row.cells] for row in table.rows]
             md = _rows_to_markdown(rows)
             if not md:
                 continue

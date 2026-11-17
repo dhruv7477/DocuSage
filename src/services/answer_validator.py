@@ -32,10 +32,10 @@ _CITATION_RE = re.compile(r"\[(\d+)\]")
 
 @dataclass
 class ValidationResult:
-    answer: str                       # possibly corrected
+    answer: str  # possibly corrected
     changed: bool = False
     stripped_citations: list[int] = field(default_factory=list)
-    warning_code: str | None = None   # "abstention_mismatch" | "model_abstained" | None
+    warning_code: str | None = None  # "abstention_mismatch" | "model_abstained" | None
 
 
 def validate_answer(

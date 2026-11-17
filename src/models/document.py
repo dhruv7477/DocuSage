@@ -35,28 +35,31 @@ class DocumentStatus(str, Enum):
     SQLAlchemy persists "DocumentStatus.PENDING" instead of "pending"
     into the VARCHAR column.
     """
-    PENDING = "pending"          # Uploaded, awaiting pipeline pickup
-    PROCESSING = "processing"    # Generic in-flight (legacy, still valid)
-    PARSING = "parsing"          # Storage download + parser running
-    CHUNKING = "chunking"        # Splitting into RAG chunks
-    EMBEDDING = "embedding"      # Computing embeddings (often the slow stage)
-    INDEXING = "indexing"        # Upserting vectors into Qdrant
-    COMPLETED = "completed"      # Vectors stored, ready to query
-    FAILED = "failed"            # Pipeline error — see error_message
+
+    PENDING = "pending"  # Uploaded, awaiting pipeline pickup
+    PROCESSING = "processing"  # Generic in-flight (legacy, still valid)
+    PARSING = "parsing"  # Storage download + parser running
+    CHUNKING = "chunking"  # Splitting into RAG chunks
+    EMBEDDING = "embedding"  # Computing embeddings (often the slow stage)
+    INDEXING = "indexing"  # Upserting vectors into Qdrant
+    COMPLETED = "completed"  # Vectors stored, ready to query
+    FAILED = "failed"  # Pipeline error — see error_message
 
     def __str__(self) -> str:
         return self.value
 
 
 # Statuses still considered "in flight" by the frontend / readiness checks
-DOCUMENT_IN_FLIGHT_STATUSES: frozenset[DocumentStatus] = frozenset({
-    DocumentStatus.PENDING,
-    DocumentStatus.PROCESSING,
-    DocumentStatus.PARSING,
-    DocumentStatus.CHUNKING,
-    DocumentStatus.EMBEDDING,
-    DocumentStatus.INDEXING,
-})
+DOCUMENT_IN_FLIGHT_STATUSES: frozenset[DocumentStatus] = frozenset(
+    {
+        DocumentStatus.PENDING,
+        DocumentStatus.PROCESSING,
+        DocumentStatus.PARSING,
+        DocumentStatus.CHUNKING,
+        DocumentStatus.EMBEDDING,
+        DocumentStatus.INDEXING,
+    }
+)
 
 
 class DocumentType(str, Enum):

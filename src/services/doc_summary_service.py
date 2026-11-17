@@ -67,10 +67,11 @@ If the user asked about a specific aspect, focus the summary on that aspect."""
 @dataclass
 class SummaryOutcome:
     """Metadata about a summary run, returned alongside the token stream."""
-    documents: list[tuple[str, str]]          # (doc_id, filename) summarized
+
+    documents: list[tuple[str, str]]  # (doc_id, filename) summarized
     total_chunks: int = 0
-    map_calls: int = 0                        # 0 = single-pass
-    truncated: bool = False                   # hit summary_max_total_chunks
+    map_calls: int = 0  # 0 = single-pass
+    truncated: bool = False  # hit summary_max_total_chunks
     sources: list[CitedSource] = field(default_factory=list)  # one per document
 
 
@@ -96,11 +97,15 @@ class DocSummaryService:
         # one streamed call (no map phase). Larger docs map-reduce to here.
         self._context_budget = context_budget or settings.summary_context_token_budget
         self._map_budget = map_token_budget or settings.summary_map_token_budget
-        self._section_max_tokens = section_max_tokens or settings.summary_section_max_tokens
+        self._section_max_tokens = (
+            section_max_tokens or settings.summary_section_max_tokens
+        )
         self._final_max_tokens = final_max_tokens or settings.summary_final_max_tokens
         self._max_total_chunks = max_total_chunks or settings.summary_max_total_chunks
         self._timeout = timeout_seconds or settings.summary_timeout_seconds
-        self._map_concurrency = max(1, map_concurrency or settings.summary_map_concurrency)
+        self._map_concurrency = max(
+            1, map_concurrency or settings.summary_map_concurrency
+        )
 
     async def prepare_summary_stream(
         self,
@@ -119,7 +124,7 @@ class DocSummaryService:
         outcome = SummaryOutcome(documents=list(documents))
 
         # ── Fetch all chunks per document ─────────────────────────
-        doc_texts: list[str] = []   # one rendered blob per document
+        doc_texts: list[str] = []  # one rendered blob per document
         chunk_budget = self._max_total_chunks
         for doc_id, filename in documents:
             chunks = await self._vector_store.list_document_chunks(
@@ -161,6 +166,7 @@ class DocSummaryService:
                     "I couldn't find any indexed content for the requested "
                     "document(s). Make sure they finished processing, then try again."
                 )
+
             return outcome, _empty()
 
         # ── Map-reduce only if the doc is too big for a single pass ──
@@ -170,7 +176,9 @@ class DocSummaryService:
         level = 0
         while count_tokens(material) > self._context_budget and level < 2:
             level += 1
-            segments = _pack_segments(doc_texts if level == 1 else [material], self._map_budget)
+            segments = _pack_segments(
+                doc_texts if level == 1 else [material], self._map_budget
+            )
             log.info(
                 "summary_map_level",
                 level=level,
@@ -256,7 +264,9 @@ class DocSummaryService:
 
 
 def _render_chunk(chunk: SearchResult) -> str:
-    heading = " > ".join(chunk.payload.heading_path) if chunk.payload.heading_path else ""
+    heading = (
+        " > ".join(chunk.payload.heading_path) if chunk.payload.heading_path else ""
+    )
     return f"{heading}\n{chunk.payload.text}" if heading else chunk.payload.text
 
 

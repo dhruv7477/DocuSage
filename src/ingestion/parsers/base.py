@@ -42,6 +42,7 @@ BlockType = Literal["heading", "paragraph", "list_item", "table", "caption"]
 @dataclass
 class ParsedBlock:
     """A single semantically-meaningful unit of extracted text."""
+
     text: str
     block_type: BlockType
     heading_path: list[str] = field(default_factory=list)
@@ -55,6 +56,7 @@ class ParsedBlock:
 @dataclass
 class ParsedPage:
     """Legacy view: blocks grouped by `page_number` for older chunker code."""
+
     page_number: int
     text: str
 
@@ -65,6 +67,7 @@ class ParsedDocument:
     Normalised output from any parser.
     Block-first; the `pages` property is derived for backward compat.
     """
+
     filename: str
     blocks: list[ParsedBlock] = field(default_factory=list)
     total_pages: int = 0

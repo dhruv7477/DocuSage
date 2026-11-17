@@ -4,7 +4,6 @@ tests/unit/test_prompt_builder.py
 Unit tests for PromptBuilder — pure logic, no external deps.
 """
 
-
 from src.providers.llm.base import LLMMessage
 from src.services.prompt_builder import (
     NO_ANSWER_PHRASE,
@@ -44,7 +43,7 @@ class TestCitationAlignment:
         builder = PromptBuilder()
         results = [
             _make_result("Alpha text.", source="a.pdf"),
-            _make_result("Alpha text.", source="b.pdf"),   # dup text — skipped
+            _make_result("Alpha text.", source="b.pdf"),  # dup text — skipped
             _make_result("Beta text.", source="c.pdf"),
         ]
         prompt = builder.build(query="q", search_results=results)
@@ -77,7 +76,6 @@ class TestCitationAlignment:
 
 
 class TestPromptBuilder:
-
     def test_build_returns_system_user_messages(self):
         builder = PromptBuilder()
         result = builder.build(
@@ -118,10 +116,12 @@ class TestPromptBuilder:
         builder = PromptBuilder()
         result = builder.build(
             query="Question",
-            search_results=[_make_result(
-                "Body text.",
-                heading_path=["Chapter 3", "3.2 Refunds"],
-            )],
+            search_results=[
+                _make_result(
+                    "Body text.",
+                    heading_path=["Chapter 3", "3.2 Refunds"],
+                )
+            ],
         )
         # The header line should include the joined heading path.
         assert "Chapter 3 > 3.2 Refunds" in result.messages[0].content
@@ -135,7 +135,8 @@ class TestPromptBuilder:
     def test_grounded_prompt_enforces_citations(self):
         builder = PromptBuilder()
         result = builder.build(
-            query="Q", search_results=[_make_result("X.")],
+            query="Q",
+            search_results=[_make_result("X.")],
         )
         sys_text = result.messages[0].content
         assert "[1]" in sys_text  # example citation form is shown

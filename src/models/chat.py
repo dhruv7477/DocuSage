@@ -27,6 +27,7 @@ class MessageRole(str, Enum):
     regardless of Python version, so existing rows and downstream
     consumers (LLMMessage.role, sources_json) keep working.
     """
+
     USER = "user"
     ASSISTANT = "assistant"
     SYSTEM = "system"

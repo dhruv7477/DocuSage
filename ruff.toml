@@ -1,0 +1,3 @@
+# Shared by local runs and CI. The ruff version is pinned in requirements.txt
+# and .github/workflows/ci.yml; keep the two in step.
+target-version = "py311"

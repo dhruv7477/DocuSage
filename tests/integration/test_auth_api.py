@@ -28,7 +28,6 @@ def client(app):
 
 
 class TestRegisterEndpoint:
-
     def test_register_returns_201(self, client):
         with patch("src.api.v1.auth.AuthService") as MockService:
             mock_svc = AsyncMock()
@@ -68,7 +67,6 @@ class TestRegisterEndpoint:
 
 
 class TestLoginEndpoint:
-
     def test_login_success_returns_tokens(self, client):
         with patch("src.api.v1.auth.AuthService") as MockService:
             mock_svc = AsyncMock()
@@ -95,6 +93,7 @@ class TestLoginEndpoint:
 
     def test_login_invalid_credentials_returns_401(self, client):
         from src.core.exceptions import AuthenticationError
+
         with patch("src.api.v1.auth.AuthService") as MockService:
             mock_svc = AsyncMock()
             mock_svc.login.side_effect = AuthenticationError("Invalid credentials.")
@@ -109,7 +108,6 @@ class TestLoginEndpoint:
 
 
 class TestMeEndpoint:
-
     def test_me_without_token_returns_403(self, client):
         resp = client.get("/api/v1/auth/me")
         assert resp.status_code in (401, 403)
@@ -138,6 +136,7 @@ class TestMeEndpoint:
 
         from datetime import datetime, timezone
         from src.models.user import User, UserRole
+
         now = datetime.now(timezone.utc)
         mock_user = User()
         mock_user.id = user_id
@@ -152,6 +151,7 @@ class TestMeEndpoint:
         # get_current_user resolves the user via its `db` dependency —
         # override get_db so the lookup hits a mock session, not Postgres.
         from src.db.session import get_db
+
         mock_db = AsyncMock()
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_user
@@ -174,7 +174,6 @@ class TestMeEndpoint:
 
 
 class TestHealthEndpoint:
-
     def test_health_returns_ok(self, client):
         resp = client.get("/health")
         assert resp.status_code == 200

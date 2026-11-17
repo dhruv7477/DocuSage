@@ -13,11 +13,11 @@ pytestmark = pytest.mark.unit
 
 
 class TestCitationStripping:
-
     def test_in_range_citations_kept(self):
         result = validate_answer(
             "The deadline is three days [1][2].",
-            num_sources=3, abstained=False,
+            num_sources=3,
+            abstained=False,
         )
         assert result.answer == "The deadline is three days [1][2]."
         assert not result.changed
@@ -26,7 +26,8 @@ class TestCitationStripping:
     def test_out_of_range_citation_stripped(self):
         result = validate_answer(
             "The deadline is three days [1][7].",
-            num_sources=3, abstained=False,
+            num_sources=3,
+            abstained=False,
         )
         assert "[7]" not in result.answer
         assert "[1]" in result.answer
@@ -41,7 +42,8 @@ class TestCitationStripping:
     def test_whitespace_cleanup_after_strip(self):
         result = validate_answer(
             "Deadline is three days [9] .",
-            num_sources=2, abstained=False,
+            num_sources=2,
+            abstained=False,
         )
         assert "  " not in result.answer
         assert " ." not in result.answer
@@ -49,7 +51,9 @@ class TestCitationStripping:
     def test_citations_disallowed_strips_all(self):
         result = validate_answer(
             "Summary point [1] and detail [2].",
-            num_sources=5, abstained=False, allow_citations=False,
+            num_sources=5,
+            abstained=False,
+            allow_citations=False,
         )
         assert "[1]" not in result.answer
         assert "[2]" not in result.answer
@@ -64,11 +68,11 @@ class TestCitationStripping:
 
 
 class TestAbstentionContract:
-
     def test_abstained_answer_replaced_when_phrase_missing(self):
         result = validate_answer(
             "The capital of France is Paris.",
-            num_sources=0, abstained=True,
+            num_sources=0,
+            abstained=True,
         )
         assert result.answer == NO_ANSWER_PHRASE
         assert result.changed
@@ -83,7 +87,8 @@ class TestAbstentionContract:
     def test_voluntary_abstention_flagged(self):
         result = validate_answer(
             NO_ANSWER_PHRASE,
-            num_sources=4, abstained=False,
+            num_sources=4,
+            abstained=False,
         )
         assert result.answer == NO_ANSWER_PHRASE
         assert result.warning_code == "model_abstained"

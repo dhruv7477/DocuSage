@@ -11,24 +11,25 @@ The granular ingestion sub-states (parsing/chunking/embedding/indexing)
 are stored in the existing `status` column — no enum migration is needed
 because `status` is a VARCHAR, not a Postgres enum type.
 """
+
 from alembic import op
 import sqlalchemy as sa
 
-revision = 'a3f1b29e74cd'
-down_revision = '831861dd2659'
+revision = "a3f1b29e74cd"
+down_revision = "831861dd2659"
 branch_labels = None
 depends_on = None
 
 
 def upgrade() -> None:
     op.add_column(
-        'documents',
-        sa.Column('progress', sa.Integer(), nullable=False, server_default='0'),
+        "documents",
+        sa.Column("progress", sa.Integer(), nullable=False, server_default="0"),
     )
     # Drop the server_default after backfilling; new rows are populated by
     # the application so we don't need a DB-level default going forward.
-    op.alter_column('documents', 'progress', server_default=None)
+    op.alter_column("documents", "progress", server_default=None)
 
 
 def downgrade() -> None:
-    op.drop_column('documents', 'progress')
+    op.drop_column("documents", "progress")

@@ -56,6 +56,7 @@ limiter = Limiter(key_func=_get_rate_limit_key, default_limits=[])
 def default_limit() -> str:
     """Return the default rate limit string (reads from settings lazily)."""
     from src.configs.config import get_settings
+
     s = get_settings()
     return f"{s.rate_limit_per_minute}/minute"
 
@@ -63,5 +64,6 @@ def default_limit() -> str:
 def chat_limit() -> str:
     """Return the chat-specific rate limit string (reads from settings lazily)."""
     from src.configs.config import get_settings
+
     s = get_settings()
     return f"{s.rate_limit_chat_per_minute}/minute"

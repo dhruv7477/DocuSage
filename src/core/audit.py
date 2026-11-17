@@ -39,14 +39,16 @@ from src.models.audit_log import AuditLog
 log = get_logger(__name__)
 
 # ── Paths that are always skipped (health, docs, metrics) ─────────
-_SKIP_PATHS = frozenset({
-    "/health",
-    "/docs",
-    "/redoc",
-    "/openapi.json",
-    "/metrics",
-    "/favicon.ico",
-})
+_SKIP_PATHS = frozenset(
+    {
+        "/health",
+        "/docs",
+        "/redoc",
+        "/openapi.json",
+        "/metrics",
+        "/favicon.ico",
+    }
+)
 
 # ── Only log GETs for these sensitive path prefixes ───────────────
 _SENSITIVE_GET_PREFIXES = (
@@ -58,30 +60,30 @@ _SENSITIVE_GET_PREFIXES = (
 # ── Action map: (method, path_prefix) → action string ────────────
 _ACTION_MAP: list[tuple[str, str, str]] = [
     # Auth
-    ("POST",   "/api/v1/auth/register",      "auth.register"),
-    ("POST",   "/api/v1/auth/login",          "auth.login"),
-    ("POST",   "/api/v1/auth/refresh",        "auth.refresh"),
-    ("PUT",    "/api/v1/auth/me/password",    "auth.change_password"),
-    ("GET",    "/api/v1/auth/me",             "auth.me"),
+    ("POST", "/api/v1/auth/register", "auth.register"),
+    ("POST", "/api/v1/auth/login", "auth.login"),
+    ("POST", "/api/v1/auth/refresh", "auth.refresh"),
+    ("PUT", "/api/v1/auth/me/password", "auth.change_password"),
+    ("GET", "/api/v1/auth/me", "auth.me"),
     # Workspaces
-    ("POST",   "/api/v1/workspaces",          "workspace.create"),
-    ("PATCH",  "/api/v1/workspaces/",         "workspace.update"),
-    ("DELETE", "/api/v1/workspaces/",         "workspace.delete"),
-    ("POST",   "/api/v1/workspaces/",         "workspace.member_add"),   # /{id}/members
-    ("DELETE", "/api/v1/workspaces/",         "workspace.member_remove"),
+    ("POST", "/api/v1/workspaces", "workspace.create"),
+    ("PATCH", "/api/v1/workspaces/", "workspace.update"),
+    ("DELETE", "/api/v1/workspaces/", "workspace.delete"),
+    ("POST", "/api/v1/workspaces/", "workspace.member_add"),  # /{id}/members
+    ("DELETE", "/api/v1/workspaces/", "workspace.member_remove"),
     # Documents
-    ("POST",   "/api/v1/documents/upload",    "document.upload"),
-    ("DELETE", "/api/v1/documents/",          "document.delete"),
+    ("POST", "/api/v1/documents/upload", "document.upload"),
+    ("DELETE", "/api/v1/documents/", "document.delete"),
     # Chat (more specific prefix must come first)
-    ("POST",   "/api/v1/chat/",               "chat.query"),
-    ("POST",   "/api/v1/chat",                "chat.create"),
-    ("DELETE", "/api/v1/chat/",               "chat.delete"),
+    ("POST", "/api/v1/chat/", "chat.query"),
+    ("POST", "/api/v1/chat", "chat.create"),
+    ("DELETE", "/api/v1/chat/", "chat.delete"),
     # Eval
-    ("POST",   "/api/v1/eval/run",            "eval.run"),
-    ("POST",   "/api/v1/eval/suite",          "eval.suite"),
+    ("POST", "/api/v1/eval/run", "eval.run"),
+    ("POST", "/api/v1/eval/suite", "eval.suite"),
     # Admin
-    ("PATCH",  "/api/v1/admin/users/",        "admin.update_user"),
-    ("GET",    "/api/v1/admin/",              "admin.read"),
+    ("PATCH", "/api/v1/admin/users/", "admin.update_user"),
+    ("GET", "/api/v1/admin/", "admin.read"),
 ]
 
 
@@ -148,6 +150,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
 
         # Fire-and-forget audit write (don't await — no latency impact)
         import asyncio
+
         asyncio.create_task(
             _write_audit_log(
                 request=request,

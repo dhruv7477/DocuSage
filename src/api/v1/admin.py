@@ -38,6 +38,7 @@ router = APIRouter(prefix="/admin", tags=["Admin"])
 
 # ── Response Schemas ──────────────────────────────────────────────
 
+
 class UserAdminResponse(BaseModel):
     id: str
     email: str
@@ -102,11 +103,13 @@ class PaginatedAuditLogsResponse(BaseModel):
 
 # ── Dependency ────────────────────────────────────────────────────
 
+
 def _admin_service(db: AsyncSession = Depends(get_db)) -> AdminService:
     return AdminService(db)
 
 
 # ── User Endpoints ────────────────────────────────────────────────
+
 
 @router.get(
     "/users",
@@ -191,6 +194,7 @@ async def update_user(
 
 # ── Stats Endpoint ────────────────────────────────────────────────
 
+
 @router.get(
     "/stats",
     response_model=PlatformStatsResponse,
@@ -220,6 +224,7 @@ async def get_stats(
 
 # ── Audit Log Endpoints ───────────────────────────────────────────
 
+
 @router.get(
     "/audit-logs",
     response_model=PaginatedAuditLogsResponse,
@@ -231,7 +236,9 @@ async def list_audit_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=500),
     user_id: str | None = Query(None, description="Filter by user UUID"),
-    action: str | None = Query(None, description="Filter by action e.g. 'document.upload'"),
+    action: str | None = Query(
+        None, description="Filter by action e.g. 'document.upload'"
+    ),
     status_code: int | None = Query(None, description="Filter by HTTP status code"),
     since: datetime | None = Query(None, description="ISO datetime lower bound"),
     until: datetime | None = Query(None, description="ISO datetime upper bound"),
@@ -277,6 +284,7 @@ async def get_audit_log(
 
 
 # ── Helpers ───────────────────────────────────────────────────────
+
 
 def _user_view_to_response(u: UserAdminView) -> UserAdminResponse:
     return UserAdminResponse(

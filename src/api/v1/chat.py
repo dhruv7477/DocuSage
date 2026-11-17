@@ -69,6 +69,7 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 
 # ── Dependency factories ──────────────────────────────────────────
 
+
 def _get_chat_service(db: AsyncSession = Depends(get_db)) -> ChatService:
     return ChatService(db)
 
@@ -113,7 +114,8 @@ def _get_rag_service() -> RAGService:
             model_name=_settings.reranker_model,
         ),
         query_understanding=QueryUnderstanding(
-            llm=llm, enable_hyde=_settings.enable_hyde,
+            llm=llm,
+            enable_hyde=_settings.enable_hyde,
         ),
         top_k=_settings.rag_top_k,
         abstention_threshold=_settings.abstention_threshold,
@@ -128,7 +130,10 @@ def _get_orchestrator(
     RAGService + DocSummaryService. Patched wholesale in tests.
     """
     from src.configs.config import get_settings
-    from src.providers.llm.factory import get_router_llm_provider, get_summary_llm_provider
+    from src.providers.llm.factory import (
+        get_router_llm_provider,
+        get_summary_llm_provider,
+    )
 
     _settings = get_settings()
     return ChatOrchestrator(
@@ -143,12 +148,15 @@ def _get_orchestrator(
         # Summaries run on a lighter model (see get_summary_llm_provider):
         # the answer model is too memory/compute-heavy for whole-document
         # map-reduce on CPU and was timing out.
-        summary_service=DocSummaryService(get_vector_store(), get_summary_llm_provider()),
+        summary_service=DocSummaryService(
+            get_vector_store(), get_summary_llm_provider()
+        ),
         enable_router=_settings.enable_question_router,
     )
 
 
 # ── Session CRUD ─────────────────────────────────────────────────
+
 
 @router.post(
     "",
@@ -181,7 +189,9 @@ async def list_chats(
     current_user: User = Depends(get_current_user),
     chat_service: ChatService = Depends(_get_chat_service),
 ) -> list[ChatResponse]:
-    chats = await chat_service.list_chats(workspace_id, current_user, limit=limit, offset=offset)
+    chats = await chat_service.list_chats(
+        workspace_id, current_user, limit=limit, offset=offset
+    )
     return [ChatResponse.model_validate(c) for c in chats]
 
 
@@ -233,6 +243,7 @@ async def delete_chat(
 
 # ── Messages ─────────────────────────────────────────────────────
 
+
 @router.get(
     "/{chat_id}/messages",
     response_model=list[MessageResponse],
@@ -249,6 +260,7 @@ async def get_messages(
 
 
 # ── Non-Streaming Query ───────────────────────────────────────────
+
 
 @router.post(
     "/{chat_id}/query",
@@ -318,6 +330,7 @@ async def query(
         await chat_service.update_chat_title(chat_id, title, current_user)
 
     from src.schemas.chat import CitedSourceResponse
+
     return QueryResponse(
         answer=rag_response.answer,
         sources=[
@@ -341,6 +354,7 @@ async def query(
 
 # ── SSE Streaming Query ───────────────────────────────────────────
 
+
 @router.get(
     "/{chat_id}/stream",
     summary="Stream a RAG answer via Server-Sent Events (SSE)",
@@ -349,7 +363,9 @@ async def query(
 async def stream_query(
     chat_id: uuid.UUID,
     query: str = Query(..., min_length=1, max_length=4000),
-    document_ids: str | None = Query(default=None, description="Comma-separated document IDs to scope search"),
+    document_ids: str | None = Query(
+        default=None, description="Comma-separated document IDs to scope search"
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     orchestrator: ChatOrchestrator = Depends(_get_orchestrator),
@@ -385,7 +401,7 @@ async def stream_query(
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",   # Disable Nginx buffering for SSE
+            "X-Accel-Buffering": "no",  # Disable Nginx buffering for SSE
             "Connection": "keep-alive",
         },
     )
@@ -485,7 +501,7 @@ async def _sse_generator(
                     await token_queue.put({"kind": "token", "text": tok})
                 await token_queue.put(None)  # sentinel: stream finished cleanly
             except BaseException as exc:
-                await token_queue.put(exc)   # forward any error to the consumer
+                await token_queue.put(exc)  # forward any error to the consumer
 
         producer_task = asyncio.create_task(_produce())
 
@@ -560,52 +576,60 @@ async def _sse_generator(
         # ── Phase 4: Warning events ───────────────────────────────
         if abstained and intent == "rag_query":
             code = "no_documents" if not cited else "low_confidence"
-            yield _sse_event({
-                "type": "warning",
-                "code": code,
-                "message": (
-                    "No matching content found in your documents."
-                    if code == "no_documents"
-                    else "The retrieved context is weak — the answer may be incomplete."
-                ),
-                "confidence": round(confidence, 3),
-            })
+            yield _sse_event(
+                {
+                    "type": "warning",
+                    "code": code,
+                    "message": (
+                        "No matching content found in your documents."
+                        if code == "no_documents"
+                        else "The retrieved context is weak — the answer may be incomplete."
+                    ),
+                    "confidence": round(confidence, 3),
+                }
+            )
         if result.warning_code == "model_abstained":
-            yield _sse_event({
-                "type": "warning",
-                "code": "model_abstained",
-                "message": (
-                    "The model declined to answer even though related "
-                    "content was found — try rephrasing the question."
-                ),
-                "confidence": round(confidence, 3),
-            })
+            yield _sse_event(
+                {
+                    "type": "warning",
+                    "code": "model_abstained",
+                    "message": (
+                        "The model declined to answer even though related "
+                        "content was found — try rephrasing the question."
+                    ),
+                    "confidence": round(confidence, 3),
+                }
+            )
 
         # ── Phase 5: Sources event (context-ordered; RAG only) ────
-        yield _sse_event({
-            "type": "sources",
-            "sources": [
-                {
-                    "document_id": s.document_id,
-                    "chunk_id": s.chunk_id,
-                    "source": s.source_filename,
-                    "page": s.page_number,
-                    "score": s.relevance_score,
-                    "heading_path": s.heading_path,
-                    "char_start": s.char_start,
-                    "char_end": s.char_end,
-                    "text": s.text,
-                }
-                for s in display_sources
-            ],
-            "confidence": round(confidence, 3),
-        })
+        yield _sse_event(
+            {
+                "type": "sources",
+                "sources": [
+                    {
+                        "document_id": s.document_id,
+                        "chunk_id": s.chunk_id,
+                        "source": s.source_filename,
+                        "page": s.page_number,
+                        "score": s.relevance_score,
+                        "heading_path": s.heading_path,
+                        "char_start": s.char_start,
+                        "char_end": s.char_end,
+                        "text": s.text,
+                    }
+                    for s in display_sources
+                ],
+                "confidence": round(confidence, 3),
+            }
+        )
 
         # ── Phase 6: Done event ───────────────────────────────────
         yield _sse_event({"type": "done", "message_id": str(assistant_msg.id)})
 
     except Exception as exc:
-        log.error("sse_stream_error", chat_id=str(chat_id), error=str(exc), exc_info=True)
+        log.error(
+            "sse_stream_error", chat_id=str(chat_id), error=str(exc), exc_info=True
+        )
         # LLMProviderError carries a user-safe message (e.g. "the model timed
         # out — it may still be loading"); surface it so the user knows whether
         # to retry. Fall back to a generic message for unexpected errors.
@@ -614,10 +638,12 @@ async def _sse_generator(
             if isinstance(exc, LLMProviderError)
             else "Something went wrong. Please try again."
         )
-        yield _sse_event({
-            "type": "error",
-            "message": user_message,
-        })
+        yield _sse_event(
+            {
+                "type": "error",
+                "message": user_message,
+            }
+        )
     finally:
         # Cancel the producer task if the client disconnected or an error
         # occurred before the stream finished.

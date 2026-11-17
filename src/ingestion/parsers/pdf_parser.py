@@ -63,7 +63,6 @@ class _PageRaw:
 
 
 class PDFParser(BaseParser):
-
     @property
     def supported_extensions(self) -> list[str]:
         return [".pdf"]
@@ -71,9 +70,7 @@ class PDFParser(BaseParser):
     async def parse(self, content: bytes, filename: str) -> ParsedDocument:
         loop = asyncio.get_event_loop()
         try:
-            return await loop.run_in_executor(
-                None, self._parse_sync, content, filename
-            )
+            return await loop.run_in_executor(None, self._parse_sync, content, filename)
         except DocumentProcessingError:
             raise
         except Exception as exc:
@@ -213,7 +210,9 @@ class PDFParser(BaseParser):
                     continue
                 # Use the line's largest span size — robust to mid-line
                 # superscript/subscript noise.
-                sizes = [span["size"] for span in line.get("spans", []) if span.get("size")]
+                sizes = [
+                    span["size"] for span in line.get("spans", []) if span.get("size")
+                ]
                 if not sizes:
                     continue
                 out.append((line_text.strip(), max(sizes)))

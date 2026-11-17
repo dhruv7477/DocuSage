@@ -25,7 +25,8 @@ class LLMMessage:
     A single message in a conversation.
     Mirrors the OpenAI chat format — all providers normalise to this.
     """
-    role: str       # "system" | "user" | "assistant"
+
+    role: str  # "system" | "user" | "assistant"
     content: str
 
 
@@ -35,6 +36,7 @@ class LLMConfig:
     Runtime generation parameters passed per-request.
     Defaults align with RAG use-cases (low temperature, bounded output).
     """
+
     temperature: float = 0.1
     max_tokens: int = 2048
     top_p: float = 0.95
@@ -47,6 +49,7 @@ class LLMConfig:
 @dataclass
 class LLMResponse:
     """Structured response from a generate() call."""
+
     content: str
     model: str
     prompt_tokens: int = 0

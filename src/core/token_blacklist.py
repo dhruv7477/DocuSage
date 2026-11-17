@@ -22,6 +22,7 @@ def get_redis() -> aioredis.Redis:
     global _redis_client
     if _redis_client is None:
         from src.configs.config import get_settings
+
         settings = get_settings()
         _redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
     return _redis_client

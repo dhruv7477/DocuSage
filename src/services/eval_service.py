@@ -111,19 +111,21 @@ Respond in JSON only:
 @dataclass
 class EvalResult:
     """Results from a full RAG evaluation run."""
+
     question: str
     answer: str
-    faithfulness: float | None = None          # 0-1: no hallucination
-    answer_relevance: float | None = None       # 0-1: answers the question
-    context_precision: float | None = None      # 0-1: retrieved useful chunks
-    context_recall: float | None = None         # 0-1: all needed info retrieved
-    answer_similarity: float | None = None      # 0-1: vs reference answer
+    faithfulness: float | None = None  # 0-1: no hallucination
+    answer_relevance: float | None = None  # 0-1: answers the question
+    context_precision: float | None = None  # 0-1: retrieved useful chunks
+    context_recall: float | None = None  # 0-1: all needed info retrieved
+    answer_similarity: float | None = None  # 0-1: vs reference answer
 
     # Composite score (average of available metrics)
     @property
     def composite_score(self) -> float:
         scores = [
-            s for s in [
+            s
+            for s in [
                 self.faithfulness,
                 self.answer_relevance,
                 self.context_precision,
@@ -149,6 +151,7 @@ class EvalResult:
 @dataclass
 class EvalDatapoint:
     """A single evaluation test case."""
+
     question: str
     reference_answer: str | None = None
     document_ids: list[str] = field(default_factory=list)
@@ -157,19 +160,30 @@ class EvalDatapoint:
 @dataclass
 class EvalSuiteResult:
     """Results from running a full evaluation suite."""
+
     results: list[EvalResult]
 
     @property
     def mean_faithfulness(self) -> float:
-        return _mean([r.faithfulness for r in self.results if r.faithfulness is not None])
+        return _mean(
+            [r.faithfulness for r in self.results if r.faithfulness is not None]
+        )
 
     @property
     def mean_answer_relevance(self) -> float:
-        return _mean([r.answer_relevance for r in self.results if r.answer_relevance is not None])
+        return _mean(
+            [r.answer_relevance for r in self.results if r.answer_relevance is not None]
+        )
 
     @property
     def mean_context_precision(self) -> float:
-        return _mean([r.context_precision for r in self.results if r.context_precision is not None])
+        return _mean(
+            [
+                r.context_precision
+                for r in self.results
+                if r.context_precision is not None
+            ]
+        )
 
     @property
     def mean_composite(self) -> float:
@@ -237,9 +251,7 @@ class EvalService:
         if reference and self._embedder:
             tasks["answer_similarity"] = self._answer_similarity(answer, reference)
 
-        metric_results = await asyncio.gather(
-            *tasks.values(), return_exceptions=True
-        )
+        metric_results = await asyncio.gather(*tasks.values(), return_exceptions=True)
 
         for key, val in zip(tasks.keys(), metric_results):
             if isinstance(val, Exception):
@@ -258,9 +270,7 @@ class EvalService:
 
     # ── Individual Metrics ────────────────────────────────────────
 
-    async def _faithfulness(
-        self, question: str, answer: str, context: str
-    ) -> float:
+    async def _faithfulness(self, question: str, answer: str, context: str) -> float:
         """
         Faithfulness: fraction of answer claims supported by context.
         Uses LLM to decompose answer into claims and verify each.
@@ -282,10 +292,7 @@ class EvalService:
         if not claims:
             return 1.0
 
-        supported = sum(
-            1 for c in claims
-            if c.get("verdict") == "supported"
-        )
+        supported = sum(1 for c in claims if c.get("verdict") == "supported")
         return round(supported / len(claims), 4)
 
     async def _answer_relevance(self, question: str, answer: str) -> float:
@@ -327,17 +334,11 @@ class EvalService:
             return 0.0
 
         verdicts = await asyncio.gather(
-            *[
-                self._is_chunk_useful(question, answer, chunk)
-                for chunk in contexts
-            ],
+            *[self._is_chunk_useful(question, answer, chunk) for chunk in contexts],
             return_exceptions=True,
         )
 
-        useful = sum(
-            1 for v in verdicts
-            if not isinstance(v, Exception) and v is True
-        )
+        useful = sum(1 for v in verdicts if not isinstance(v, Exception) and v is True)
         return round(useful / len(contexts), 4)
 
     async def _context_recall(
@@ -367,9 +368,7 @@ class EvalService:
         attributed = sum(1 for s in statements if s.get("attributed") is True)
         return round(attributed / len(statements), 4)
 
-    async def _answer_similarity(
-        self, answer: str, reference: str
-    ) -> float:
+    async def _answer_similarity(self, answer: str, reference: str) -> float:
         """
         Answer similarity: cosine similarity between answer and reference
         in embedding space.
@@ -382,9 +381,7 @@ class EvalService:
             return 0.5
         return round(_cosine_sim(vecs[0], vecs[1]), 4)
 
-    async def _is_chunk_useful(
-        self, question: str, answer: str, chunk: str
-    ) -> bool:
+    async def _is_chunk_useful(self, question: str, answer: str, chunk: str) -> bool:
         prompt = _CONTEXT_PRECISION_PROMPT.format(
             question=question,
             context_chunk=chunk[:600],
@@ -397,9 +394,7 @@ class EvalService:
         data = _parse_json(response.content)
         return bool(data and data.get("useful") is True)
 
-    async def _llm_similarity_score(
-        self, question: str, generated: list[str]
-    ) -> float:
+    async def _llm_similarity_score(self, question: str, generated: list[str]) -> float:
         """Fallback: ask LLM to rate question similarity as 0-100."""
         prompt = (
             f"Rate how semantically similar these questions are to the original "
@@ -421,6 +416,7 @@ class EvalService:
 
 
 # ── Helpers ───────────────────────────────────────────────────────
+
 
 def _parse_json(text: str) -> dict | None:
     """Parse JSON from LLM response, stripping markdown fences."""

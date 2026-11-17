@@ -34,6 +34,7 @@ from fastapi.testclient import TestClient
 def _postgres_reachable() -> bool:
     """The smoke pipeline writes real rows — it needs a live Postgres."""
     from src.configs.config import get_settings
+
     s = get_settings()
     try:
         with socket.create_connection((s.postgres_host, s.postgres_port), timeout=2):
@@ -63,14 +64,23 @@ MOCK_EMBEDDER.embed = AsyncMock(return_value=[[0.1] * 1024])
 
 # ── Fixtures ──────────────────────────────────────────────────────
 
+
 @pytest.fixture(scope="module")
 def client():
     """Single TestClient for the whole smoke test module."""
     from src.main import create_app
+
     app = create_app()
-    with patch("src.vector_store.factory.get_vector_store", return_value=MOCK_VECTOR_STORE), \
-         patch("src.providers.llm.factory.get_llm_provider", return_value=MOCK_LLM), \
-         patch("src.providers.embedding.factory.get_embedding_provider", return_value=MOCK_EMBEDDER):
+    with (
+        patch(
+            "src.vector_store.factory.get_vector_store", return_value=MOCK_VECTOR_STORE
+        ),
+        patch("src.providers.llm.factory.get_llm_provider", return_value=MOCK_LLM),
+        patch(
+            "src.providers.embedding.factory.get_embedding_provider",
+            return_value=MOCK_EMBEDDER,
+        ),
+    ):
         with TestClient(app, raise_server_exceptions=False) as c:
             yield c
 
@@ -82,6 +92,7 @@ def state():
 
 
 # ── Smoke Tests ───────────────────────────────────────────────────
+
 
 class TestSmokePipeline:
     """
@@ -100,11 +111,14 @@ class TestSmokePipeline:
     def test_02_register(self, client, state):
         """Register a new user account."""
         email = f"smoke_{uuid.uuid4().hex[:8]}@test.com"
-        resp = client.post("/api/v1/auth/register", json={
-            "email": email,
-            "password": "SecurePass123!",
-            "full_name": "Smoke Tester",
-        })
+        resp = client.post(
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": "SecurePass123!",
+                "full_name": "Smoke Tester",
+            },
+        )
         assert resp.status_code == 201, resp.text
         data = resp.json()
         assert data["user"]["email"] == email
@@ -113,10 +127,13 @@ class TestSmokePipeline:
 
     def test_03_login(self, client, state):
         """Login with registered credentials and receive tokens."""
-        resp = client.post("/api/v1/auth/login", json={
-            "email": state["email"],
-            "password": "SecurePass123!",
-        })
+        resp = client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": state["email"],
+                "password": "SecurePass123!",
+            },
+        )
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert "access_token" in data
@@ -133,10 +150,14 @@ class TestSmokePipeline:
 
     def test_05_create_workspace(self, client, state):
         """Create a workspace and become its owner."""
-        resp = client.post("/api/v1/workspaces", json={
-            "name": "Smoke Test Workspace",
-            "description": "Created by smoke test",
-        }, headers=state["headers"])
+        resp = client.post(
+            "/api/v1/workspaces",
+            json={
+                "name": "Smoke Test Workspace",
+                "description": "Created by smoke test",
+            },
+            headers=state["headers"],
+        )
         assert resp.status_code == 201, resp.text
         data = resp.json()
         assert data["name"] == "Smoke Test Workspace"
@@ -183,10 +204,14 @@ class TestSmokePipeline:
 
     def test_09_create_chat(self, client, state):
         """Create a chat session in the workspace."""
-        resp = client.post("/api/v1/chat", json={
-            "workspace_id": state["workspace_id"],
-            "title": "Smoke Test Chat",
-        }, headers=state["headers"])
+        resp = client.post(
+            "/api/v1/chat",
+            json={
+                "workspace_id": state["workspace_id"],
+                "title": "Smoke Test Chat",
+            },
+            headers=state["headers"],
+        )
         assert resp.status_code == 201, resp.text
         data = resp.json()
         assert data["title"] == "Smoke Test Chat"
@@ -196,6 +221,7 @@ class TestSmokePipeline:
         """Send a RAG query and receive an answer."""
         with patch("src.services.rag_service.RAGService.generate") as mock_gen:
             from src.services.rag_service import RAGResponse
+
             mock_gen.return_value = RAGResponse(
                 answer="The document discusses smoke testing.",
                 sources=[],
@@ -230,15 +256,18 @@ class TestSmokePipeline:
 
     def test_12_refresh_token(self, client, state):
         """Can exchange access token for a new token pair via refresh."""
-        resp = client.post("/api/v1/auth/login", json={
-            "email": state["email"],
-            "password": "SecurePass123!",
-        })
+        resp = client.post(
+            "/api/v1/auth/login",
+            json={
+                "email": state["email"],
+                "password": "SecurePass123!",
+            },
+        )
         refresh_token = resp.json()["refresh_token"]
 
-        resp2 = client.post("/api/v1/auth/refresh", json={
-            "refresh_token": refresh_token
-        })
+        resp2 = client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": refresh_token}
+        )
         assert resp2.status_code == 200
         assert "access_token" in resp2.json()
 
@@ -252,8 +281,9 @@ class TestSmokePipeline:
 
     def test_14_delete_document(self, client, state):
         """Delete the uploaded document."""
-        with patch("src.services.document_service.DocumentService.delete_document",
-                   AsyncMock()):
+        with patch(
+            "src.services.document_service.DocumentService.delete_document", AsyncMock()
+        ):
             resp = client.delete(
                 f"/api/v1/documents/{state['document_id']}",
                 headers=state["headers"],
@@ -283,6 +313,7 @@ class TestSmokePipeline:
         """Eval endpoint accepts a Q&A pair and returns metrics."""
         with patch("src.services.eval_service.EvalService.evaluate") as mock_eval:
             from src.services.eval_service import EvalResult
+
             # composite_score is a derived @property — not a constructor arg.
             mock_eval.return_value = EvalResult(
                 question="Q",
@@ -293,11 +324,15 @@ class TestSmokePipeline:
                 context_recall=None,
                 answer_similarity=None,
             )
-            resp = client.post("/api/v1/eval/run", json={
-                "question": "What is DocuSage?",
-                "answer": "A RAG-powered knowledge assistant.",
-                "contexts": ["DocuSage is an AI assistant for private documents."],
-            }, headers=state["headers"])
+            resp = client.post(
+                "/api/v1/eval/run",
+                json={
+                    "question": "What is DocuSage?",
+                    "answer": "A RAG-powered knowledge assistant.",
+                    "contexts": ["DocuSage is an AI assistant for private documents."],
+                },
+                headers=state["headers"],
+            )
         assert resp.status_code == 200
         data = resp.json()
         assert "composite_score" in data
