@@ -8,6 +8,42 @@ import { auth } from '@/api'
 import { useAuth } from '@/store/auth'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { DemoNotice } from '@/components/DemoNotice'
+
+// Google sign-in needs a client ID at build time (VITE_GOOGLE_CLIENT_ID).
+// Without one the button would only ever fail, so it is not shown.
+const GOOGLE_ENABLED = Boolean(import.meta.env.VITE_GOOGLE_CLIENT_ID)
+
+function GoogleSection({
+  text,
+  onCredential,
+}: {
+  text: 'signin_with' | 'signup_with'
+  onCredential: (credential: string) => void
+}) {
+  if (!GOOGLE_ENABLED) return null
+  return (
+    <>
+      <div className="relative flex items-center gap-3 py-1">
+        <div className="flex-1 h-px bg-border" />
+        <span className="text-xs text-dim font-mono">or</span>
+        <div className="flex-1 h-px bg-border" />
+      </div>
+
+      <div className="flex justify-center">
+        <GoogleLogin
+          onSuccess={(res) => res.credential && onCredential(res.credential)}
+          onError={() => toast.error('Google sign-in failed')}
+          theme="filled_black"
+          shape="rectangular"
+          size="large"
+          text={text}
+          width="100%"
+        />
+      </div>
+    </>
+  )
+}
 
 // ── Shared bg decoration ──────────────────────────────────────────
 function AuthShell({ children }: { children: React.ReactNode }) {
@@ -146,23 +182,7 @@ export function LoginPage() {
             Sign In
           </Button>
 
-          <div className="relative flex items-center gap-3 py-1">
-            <div className="flex-1 h-px bg-border" />
-            <span className="text-xs text-dim font-mono">or</span>
-            <div className="flex-1 h-px bg-border" />
-          </div>
-
-          <div className="flex justify-center">
-            <GoogleLogin
-              onSuccess={(res) => res.credential && googleMut.mutate(res.credential)}
-              onError={() => toast.error('Google sign-in failed')}
-              theme="filled_black"
-              shape="rectangular"
-              size="large"
-              text="signin_with"
-              width="100%"
-            />
-          </div>
+          <GoogleSection text="signin_with" onCredential={(c) => googleMut.mutate(c)} />
         </div>
 
         <p className="mt-5 text-center text-sm text-subtle">
@@ -214,6 +234,8 @@ export function RegisterPage() {
           </p>
         </div>
 
+        <DemoNotice />
+
         <div className="relative hud-panel hud-corners rounded-xl p-6 shadow-hud space-y-4">
           <Input
             label="Full Name"
@@ -258,23 +280,7 @@ export function RegisterPage() {
             Create Account
           </Button>
 
-          <div className="relative flex items-center gap-3 py-1">
-            <div className="flex-1 h-px bg-border" />
-            <span className="text-xs text-dim font-mono">or</span>
-            <div className="flex-1 h-px bg-border" />
-          </div>
-
-          <div className="flex justify-center">
-            <GoogleLogin
-              onSuccess={(res) => res.credential && googleMut.mutate(res.credential)}
-              onError={() => toast.error('Google sign-in failed')}
-              theme="filled_black"
-              shape="rectangular"
-              size="large"
-              text="signup_with"
-              width="100%"
-            />
-          </div>
+          <GoogleSection text="signup_with" onCredential={(c) => googleMut.mutate(c)} />
         </div>
 
         <p className="mt-5 text-center text-sm text-subtle">
