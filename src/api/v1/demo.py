@@ -20,7 +20,8 @@ class DemoInfo(BaseModel):
     enabled: bool
     max_documents: int  # 0 = unlimited
     max_upload_mb: int  # 0 = unlimited
-    questions_per_day: int  # 0 = unlimited
+    questions_per_day: int  # per user; 0 = unlimited
+    site_questions_per_day: int  # all users together; 0 = unlimited
     wipe_hour_utc: int | None  # uploads are deleted daily at this hour
     llm_host: str | None  # third party that receives questions and excerpts
 
@@ -41,6 +42,7 @@ async def demo_info() -> DemoInfo:
         max_documents=s.quota_max_documents,
         max_upload_mb=s.quota_max_upload_mb,
         questions_per_day=s.quota_questions_per_day,
+        site_questions_per_day=s.demo_global_questions_per_day,
         wipe_hour_utc=s.demo_wipe_hour_utc if s.demo_mode else None,
         llm_host=_llm_host(s),
     )

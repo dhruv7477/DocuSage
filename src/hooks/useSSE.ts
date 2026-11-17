@@ -34,28 +34,45 @@ interface StreamState {
   sources: CitedSource[]
   warnings: StreamWarning[]
   error: string | null
+  /** A limit that is not a failure (the demo's daily budget), shown as a notice. */
+  notice: string | null
 }
 
 interface UseSSEReturn extends StreamState {
   start: (url: string, onDone?: (messageId: string) => void) => void
   reset: () => void
   dismissError: () => void
+  dismissNotice: () => void
 }
 
 /** The server refused the stream before it started (quota, rate limit, access). */
 class StreamRefusedError extends Error {}
 
-/** User-facing message for a non-stream response, preferring the server's own. */
-export async function refusalMessage(response: Response): Promise<string> {
+/** Refusal codes shown as a notice rather than an error. */
+const NOTICE_CODES = new Set(['DEMO_DAILY_LIMIT'])
+
+export interface Refusal {
+  message: string
+  notice: boolean
+}
+
+/** User-facing refusal for a non-stream response, preferring the server's own message. */
+export async function readRefusal(response: Response): Promise<Refusal> {
+  let body: { message?: unknown; error_code?: unknown } | null = null
   try {
-    const body = await response.json()
-    if (body && typeof body.message === 'string' && body.message) return body.message
+    body = await response.json()
   } catch {
     // not JSON: fall through to a message based on the status
   }
-  if (response.status === 429) return 'Too many requests. Please wait a moment and try again.'
-  if (response.status === 401) return 'Your session has expired. Please sign in again.'
-  return `The assistant could not respond (HTTP ${response.status}).`
+  const notice = typeof body?.error_code === 'string' && NOTICE_CODES.has(body.error_code)
+  if (typeof body?.message === 'string' && body.message) return { message: body.message, notice }
+  return { message: statusMessage(response.status), notice }
+}
+
+function statusMessage(status: number): string {
+  if (status === 429) return 'Too many requests. Please wait a moment and try again.'
+  if (status === 401) return 'Your session has expired. Please sign in again.'
+  return `The assistant could not respond (HTTP ${status}).`
 }
 
 const initialState: StreamState = {
@@ -67,6 +84,7 @@ const initialState: StreamState = {
   sources: [],
   warnings: [],
   error: null,
+  notice: null,
 }
 
 export function useSSE(): UseSSEReturn {
@@ -80,6 +98,10 @@ export function useSSE(): UseSSEReturn {
 
   const dismissError = useCallback(() => {
     setState((s) => ({ ...s, error: null }))
+  }, [])
+
+  const dismissNotice = useCallback(() => {
+    setState((s) => ({ ...s, notice: null }))
   }, [])
 
   const start = useCallback((url: string, onDone?: (id: string) => void) => {
@@ -118,9 +140,14 @@ export function useSSE(): UseSSEReturn {
       async onopen(response) {
         const type = response.headers.get('content-type') ?? ''
         if (response.ok && type.startsWith('text/event-stream')) return
-        const message = await refusalMessage(response)
-        setState((s) => ({ ...s, streaming: false, stage: null, error: message }))
-        throw new StreamRefusedError(message)
+        const refusal = await readRefusal(response)
+        setState((s) => ({
+          ...s,
+          streaming: false,
+          stage: null,
+          ...(refusal.notice ? { notice: refusal.message } : { error: refusal.message }),
+        }))
+        throw new StreamRefusedError(refusal.message)
       },
       onmessage(e) {
         try {
@@ -186,5 +213,5 @@ export function useSSE(): UseSSEReturn {
     })
   }, [])
 
-  return { ...state, start, reset, dismissError }
+  return { ...state, start, reset, dismissError, dismissNotice }
 }

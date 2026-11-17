@@ -54,6 +54,25 @@ function ErrorBanner({ message, onDismiss }: { message: string; onDismiss: () =>
   )
 }
 
+function NoticeBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+  return (
+    <div
+      role="status"
+      className="flex items-start gap-3 px-4 py-3 mx-4 my-3 bg-teal/8 border border-teal/30 rounded-lg text-sm text-base"
+    >
+      <Info className="w-4 h-4 text-teal shrink-0 mt-0.5" />
+      <p className="flex-1 text-subtle">{message}</p>
+      <button
+        onClick={onDismiss}
+        className="text-dim hover:text-base transition-colors shrink-0"
+        aria-label="Dismiss"
+      >
+        <X className="w-4 h-4" />
+      </button>
+    </div>
+  )
+}
+
 function WarningBanner({ warning }: { warning: StreamWarning }) {
   const label =
     warning.code === 'low_confidence' ? 'Low confidence'
@@ -338,9 +357,9 @@ export function ChatView() {
   // then vanish on the next refetch. Refetch here so the persisted user
   // message replaces the temp row and the failed turn stays visible.
   useEffect(() => {
-    if (!sse.error || !activeChatId) return
+    if ((!sse.error && !sse.notice) || !activeChatId) return
     qc.invalidateQueries({ queryKey: ['messages', activeChatId] })
-  }, [sse.error, activeChatId, qc])
+  }, [sse.error, sse.notice, activeChatId, qc])
 
   // Fetch workspace documents to enforce the "at least one Ready doc"
   // guard. Poll while anything is still indexing so the composer
@@ -537,6 +556,11 @@ export function ChatView() {
       {sse.error && (
         <div className="shrink-0">
           <ErrorBanner message={sse.error} onDismiss={sse.dismissError} />
+        </div>
+      )}
+      {sse.notice && (
+        <div className="shrink-0">
+          <NoticeBanner message={sse.notice} onDismiss={sse.dismissNotice} />
         </div>
       )}
 

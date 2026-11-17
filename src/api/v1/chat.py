@@ -286,9 +286,9 @@ async def query(
     """
     chat_service = ChatService(db)
 
-    # Verify ownership and current membership, then the daily question quota
+    # Verify ownership and current membership, then the daily question limits
     chat = await chat_service.get_chat_for_question(chat_id, current_user)
-    await QuotaService(db).check_question(current_user)
+    await QuotaService(db).reserve_question(current_user)
 
     # Load history for context
     history = await chat_service.load_history(chat_id)
@@ -401,7 +401,7 @@ async def stream_query(
     # Access and quota errors must be a normal JSON error response, so they
     # are checked before the stream starts (afterwards the status is 200).
     await ChatService(db).get_chat_for_question(chat_id, current_user)
-    await QuotaService(db).check_question(current_user)
+    await QuotaService(db).reserve_question(current_user)
 
     return StreamingResponse(
         _sse_generator(

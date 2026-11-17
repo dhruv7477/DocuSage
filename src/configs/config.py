@@ -275,6 +275,9 @@ class Settings(BaseSettings):
     quota_max_documents: int = Field(default=0, ge=0)
     quota_max_upload_mb: int = Field(default=0, ge=0)
     quota_questions_per_day: int = Field(default=0, ge=0)
+    # Questions per UTC day across all users together, to stay inside a
+    # hosted LLM's daily token limit. 0 = off. Admins are exempt but count.
+    demo_global_questions_per_day: int = Field(default=0, ge=0)
 
     # /health/deep lists infrastructure details. By default only clients on
     # the same host (127.0.0.1) may call it, for example

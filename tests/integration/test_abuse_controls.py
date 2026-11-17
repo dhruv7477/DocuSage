@@ -22,7 +22,7 @@ from src.configs.config import get_settings
 from src.core.rate_limit import limiter
 from src.db.session import get_db
 from src.services.document_service import DocumentService
-from src.services.quota_service import QuotaService
+from src.services.quota_service import DEMO_DAILY_LIMIT_MESSAGE, QuotaService
 from tests.fakes import InMemoryStorage
 
 PASSWORD = "AbusePass123!"
@@ -124,21 +124,52 @@ def _upload(c: TestClient, user: dict[str, str], ws: str, name: str, size: int =
     )
 
 
-def _add_user_messages(chat_id: str, count: int) -> None:
+def _sql(statement: str, **params: object) -> object:
+    """Run one statement on its own connection; return the first column, if any."""
     engine = create_engine(get_settings().database_url_sync)
     try:
         with engine.begin() as conn:
-            for _ in range(count):
-                conn.execute(
-                    text(
-                        "INSERT INTO messages (id, chat_id, role, content, token_count, "
-                        "created_at, updated_at) VALUES (gen_random_uuid(), :chat, "
-                        "'user', 'earlier question', 0, now(), now())"
-                    ),
-                    {"chat": chat_id},
-                )
+            result = conn.execute(text(statement), params)
+            return result.scalar() if result.returns_rows else None
     finally:
         engine.dispose()
+
+
+def _add_questions(user: dict[str, str], count: int) -> None:
+    for _ in range(count):
+        _sql(
+            "INSERT INTO question_usage (user_id) "
+            "SELECT id FROM users WHERE email = :email",
+            email=user["email"],
+        )
+
+
+def _questions_today(user: dict[str, str] | None = None) -> int:
+    where = "asked_at >= date_trunc('day', now() AT TIME ZONE 'utc') AT TIME ZONE 'utc'"
+    if user is None:
+        return int(_sql(f"SELECT count(*) FROM question_usage WHERE {where}"))
+    return int(
+        _sql(
+            "SELECT count(*) FROM question_usage q JOIN users u ON u.id = q.user_id "
+            f"WHERE u.email = :email AND {where}",
+            email=user["email"],
+        )
+    )
+
+
+def _new_chat(c: TestClient, user: dict[str, str]) -> str:
+    ws = _workspace(c, user)
+    r = c.post("/api/v1/chat", json={"workspace_id": ws}, headers=_headers(user))
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def _ask(c: TestClient, user: dict[str, str], chat_id: str):
+    return c.get(
+        f"/api/v1/chat/{chat_id}/stream",
+        params={"query": "a question"},
+        headers=_headers(user),
+    )
 
 
 # ── Rate limits ───────────────────────────────────────────────────
@@ -228,7 +259,7 @@ def test_daily_question_quota_blocks_the_stream_before_it_starts(
     chat_id = client.post(
         "/api/v1/chat", json={"workspace_id": ws}, headers=_headers(user)
     ).json()["id"]
-    _add_user_messages(chat_id, 2)
+    _add_questions(user, 2)
 
     stream = client.get(
         f"/api/v1/chat/{chat_id}/stream",
@@ -245,6 +276,74 @@ def test_daily_question_quota_blocks_the_stream_before_it_starts(
         assert resp.status_code == 429
         assert resp.headers["content-type"].startswith("application/json")
         assert "Daily question limit" in resp.json()["message"]
+
+
+def test_deleting_chats_does_not_give_questions_back(
+    client: TestClient, settings_override
+) -> None:
+    # Messages are deleted with their chat, so the quota counts
+    # question_usage rows instead (DECISIONS D7).
+    settings_override(quota_questions_per_day=1)
+    user = _signup(client)
+    first = _new_chat(client, user)
+    assert _ask(client, user, first).status_code == 200
+
+    assert (
+        client.delete(f"/api/v1/chat/{first}", headers=_headers(user)).status_code
+        == 204
+    )
+    refused = _ask(client, user, _new_chat(client, user))
+
+    assert refused.status_code == 429
+    assert refused.json()["error_code"] == "QUOTA_EXCEEDED"
+
+
+def test_site_wide_budget_refuses_with_the_demo_message(
+    client: TestClient, settings_override
+) -> None:
+    _sql("DELETE FROM question_usage")  # start the day's site-wide count at 0
+    settings_override(demo_global_questions_per_day=2)
+    first, second, third = (_signup(client) for _ in range(3))
+    assert _ask(client, first, _new_chat(client, first)).status_code == 200
+    assert _ask(client, second, _new_chat(client, second)).status_code == 200
+
+    chat_id = _new_chat(client, third)
+    stream = _ask(client, third, chat_id)
+    query = client.post(
+        f"/api/v1/chat/{chat_id}/query",
+        json={"query": "a question"},
+        headers=_headers(third),
+    )
+
+    for resp in (stream, query):
+        assert resp.status_code == 429
+        assert resp.headers["content-type"].startswith("application/json")
+        assert resp.json()["error_code"] == "DEMO_DAILY_LIMIT"
+        assert resp.json()["message"] == DEMO_DAILY_LIMIT_MESSAGE
+    assert _questions_today() == 2
+
+
+def test_admins_skip_the_site_wide_budget_but_still_count(
+    client: TestClient, settings_override
+) -> None:
+    _sql("DELETE FROM question_usage")
+    settings_override(demo_global_questions_per_day=1)
+    member, admin = _signup(client), _signup(client)
+    _sql("UPDATE users SET role = 'admin' WHERE email = :e", e=admin["email"])
+    assert _ask(client, member, _new_chat(client, member)).status_code == 200
+
+    assert _ask(client, admin, _new_chat(client, admin)).status_code == 200
+    assert _questions_today() == 2
+
+
+def test_no_usage_is_recorded_while_question_limits_are_off(
+    client: TestClient, settings_override
+) -> None:
+    settings_override(quota_questions_per_day=0, demo_global_questions_per_day=0)
+    user = _signup(client)
+
+    assert _ask(client, user, _new_chat(client, user)).status_code == 200
+    assert _questions_today(user) == 0
 
 
 # ── Access rules (A9) ─────────────────────────────────────────────
