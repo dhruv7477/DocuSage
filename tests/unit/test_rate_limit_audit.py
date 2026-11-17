@@ -5,10 +5,8 @@ Unit tests for rate limiting helpers and audit log utilities.
 No real HTTP server needed — tests the pure logic.
 """
 
-import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
 
 from src.core.audit import _get_client_ip, _resolve_action
 from src.core.rate_limit import chat_limit, default_limit

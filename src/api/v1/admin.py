@@ -23,14 +23,14 @@ crashes at router-include time with NameError).
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
 from src.core.rate_limit import default_limit, limiter
-from src.dependencies import get_current_user, require_super_admin
+from src.dependencies import require_super_admin
 from src.db.session import get_db
 from src.models.user import User
-from src.services.admin_service import AdminService, AuditLogView, PlatformStats, UserAdminView
+from src.services.admin_service import AdminService, AuditLogView, UserAdminView
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/admin", tags=["Admin"])

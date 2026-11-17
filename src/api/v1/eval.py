@@ -146,7 +146,6 @@ async def run_eval_suite(
 
     eval_results = [r for r in results if not isinstance(r, Exception)]
 
-    from src.services.eval_service import EvalSuiteResult, _mean
     suite = EvalSuiteResult(results=eval_results)
     return EvalSuiteResponse(
         **suite.summary(),

@@ -4,10 +4,9 @@ tests/integration/test_documents_api.py
 Integration tests for /api/v1/documents/* endpoints.
 """
 
-import io
 import uuid
 from contextlib import contextmanager
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient

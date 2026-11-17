@@ -9,13 +9,12 @@ Also verifies the critical user isolation guarantee:
 """
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from src.models.user import User, UserRole
 from src.providers.llm.base import LLMResponse
-from src.services.prompt_builder import PromptBuilder
 from src.services.rag_service import RAGService
 from src.vector_store.base import SearchResult, VectorPayload
 

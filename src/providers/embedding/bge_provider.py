@@ -18,9 +18,7 @@ Install: pip install sentence-transformers torch
 """
 
 import asyncio
-from functools import lru_cache
 
-import numpy as np
 
 # Eagerly import sentence-transformers (and transitively torch) at module
 # import time. The first time `import sentence_transformers` runs in a

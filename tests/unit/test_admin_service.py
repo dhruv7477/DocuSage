@@ -6,14 +6,14 @@ Unit tests for AdminService — all DB calls mocked.
 
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.core.exceptions import InsufficientPermissionsError, UserNotFoundError
 from src.models.audit_log import AuditLog
 from src.models.user import User, UserRole
-from src.services.admin_service import AdminService, PlatformStats
+from src.services.admin_service import AdminService
 
 
 def _make_user(
@@ -143,7 +143,7 @@ class TestUpdateUser:
         ]
 
         service = AdminService(db)
-        view = await service.update_user(
+        await service.update_user(
             user.id, is_active=False, acting_admin_id=admin_id
         )
 

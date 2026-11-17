@@ -23,7 +23,6 @@ Collection configuration
   remediation hint, instead of silently accepting partial data.
 """
 
-import uuid
 
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qmodels

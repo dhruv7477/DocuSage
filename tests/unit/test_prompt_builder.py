@@ -4,7 +4,6 @@ tests/unit/test_prompt_builder.py
 Unit tests for PromptBuilder — pure logic, no external deps.
 """
 
-import pytest
 
 from src.providers.llm.base import LLMMessage
 from src.services.prompt_builder import (

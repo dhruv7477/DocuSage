@@ -48,7 +48,6 @@ from src.schemas.auth import (
     LoginRequest,
     RegisterRequest,
     TokenResponse,
-    UserResponse,
 )
 
 log = get_logger(__name__)
