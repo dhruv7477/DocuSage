@@ -1,37 +1,99 @@
 """
 src/providers/llm/openai_provider.py
 ──────────────────────────────────────
-OpenAI LLM provider — plug-in for GPT-4o and other OpenAI models.
+OpenAI LLM provider, and through `base_url` any OpenAI-compatible API
+(Groq, Together, OpenRouter, a self-hosted vLLM server...).
 
-Activation: set LLM_PROVIDER=openai and OPENAI_API_KEY in .env.
-Zero other code changes needed — same BaseLLMProvider interface.
+Activation: LLM_PROVIDER=openai, OPENAI_API_KEY, OPENAI_MODEL, and
+OPENAI_BASE_URL for a non-OpenAI endpoint, for example
+https://api.groq.com/openai/v1.
 
-Note: vLLMProvider is nearly identical because vLLM uses the OpenAI SDK.
-This class exists as a dedicated OpenAI implementation that can handle
-OpenAI-specific features (function calling, vision, etc.) in future phases.
+Upstream failures become LLMProviderError with a message that is safe to
+show to the user. A rate limit (HTTP 429), common on free tiers, becomes
+LLMRateLimitedError after the SDK's own retries, which honour the
+server's Retry-After header.
 """
 
 from collections.abc import AsyncIterator
+from urllib.parse import urlsplit
 
-from openai import AsyncOpenAI, APIConnectionError, APIStatusError
+import httpx
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AsyncOpenAI,
+    RateLimitError,
+)
 
-from src.core.exceptions import LLMProviderError
+from src.core.exceptions import LLMProviderError, LLMRateLimitedError
 from src.core.logger import get_logger
 from src.providers.llm.base import BaseLLMProvider, LLMConfig, LLMMessage, LLMResponse
 
 log = get_logger(__name__)
 
+RATE_LIMITED_MESSAGE = (
+    "The AI service is at its usage limit right now. Please try again in a minute."
+)
+TIMEOUT_MESSAGE = "The AI service took too long to answer. Please try again."
+
 
 class OpenAIProvider(BaseLLMProvider):
-    def __init__(self, api_key: str, model: str, timeout: int = 60) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        timeout: int = 60,
+        base_url: str = "",
+        max_retries: int = 2,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
         if not api_key:
-            raise ValueError("OPENAI_API_KEY is required for OpenAI provider.")
+            raise ValueError("OPENAI_API_KEY is required for the OpenAI provider.")
         self._model = model
-        self._client = AsyncOpenAI(api_key=api_key, timeout=timeout, max_retries=2)
+        self._service = urlsplit(base_url).hostname if base_url else "api.openai.com"
+        self._client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url or None,
+            timeout=timeout,
+            max_retries=max_retries,
+            http_client=http_client,
+        )
 
     @property
     def provider_name(self) -> str:
         return f"openai:{self._model}"
+
+    def _provider_error(self, exc: Exception) -> LLMProviderError:
+        """Map an OpenAI SDK error to a user-safe LLMProviderError."""
+        log.warning(
+            "llm_upstream_error",
+            service=self._service,
+            model=self._model,
+            error_type=type(exc).__name__,
+            status=getattr(exc, "status_code", None),
+        )
+        if isinstance(exc, RateLimitError):
+            return LLMRateLimitedError(RATE_LIMITED_MESSAGE, detail=str(exc))
+        if isinstance(exc, APITimeoutError):
+            return LLMProviderError(TIMEOUT_MESSAGE, detail=str(exc))
+        if isinstance(exc, APIConnectionError):
+            return LLMProviderError(
+                f"Cannot reach the AI service ({self._service}).", detail=str(exc)
+            )
+        if isinstance(exc, APIStatusError):
+            return LLMProviderError(
+                f"The AI service returned an error (HTTP {exc.status_code}).",
+                detail=exc.message,
+            )
+        return LLMProviderError("The AI service failed.", detail=str(exc))
+
+    @staticmethod
+    def _request(cfg: LLMConfig) -> dict:
+        extra: dict = {}
+        if cfg.response_format == "json":
+            extra["response_format"] = {"type": "json_object"}
+        return extra
 
     async def generate(
         self,
@@ -50,13 +112,10 @@ class OpenAIProvider(BaseLLMProvider):
                 max_tokens=cfg.max_tokens,
                 top_p=cfg.top_p,
                 stop=cfg.stop_sequences or None,
+                **self._request(cfg),
             )
-        except APIConnectionError as exc:
-            raise LLMProviderError("Cannot reach OpenAI API.", detail=str(exc)) from exc
-        except APIStatusError as exc:
-            raise LLMProviderError(
-                f"OpenAI API error {exc.status_code}", detail=exc.message
-            ) from exc
+        except (APIConnectionError, APIStatusError) as exc:
+            raise self._provider_error(exc) from exc
 
         usage = resp.usage
         return LLMResponse(
@@ -82,19 +141,24 @@ class OpenAIProvider(BaseLLMProvider):
                 temperature=cfg.temperature,
                 max_tokens=cfg.max_tokens,
                 stream=True,
+                **self._request(cfg),
             ) as stream:
                 async for chunk in stream:
-                    delta = chunk.choices[0].delta.content
+                    delta = chunk.choices[0].delta.content if chunk.choices else None
                     if delta:
                         yield delta
-        except APIConnectionError as exc:
-            raise LLMProviderError(
-                "Cannot reach OpenAI during stream.", detail=str(exc)
-            ) from exc
+        except (APIConnectionError, APIStatusError) as exc:
+            raise self._provider_error(exc) from exc
 
     async def health(self) -> bool:
         try:
             await self._client.models.retrieve(self._model)
             return True
-        except Exception:
+        except Exception as exc:
+            log.warning(
+                "llm_health_failed",
+                service=self._service,
+                model=self._model,
+                error_type=type(exc).__name__,
+            )
             return False
