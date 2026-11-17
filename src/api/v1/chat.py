@@ -35,12 +35,13 @@ import json
 import uuid
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.exceptions import LLMProviderError
 from src.core.logger import get_logger
+from src.core.rate_limit import QUESTION_SCOPE, chat_limit, limiter, setting_limit
 from src.db.session import get_db
 from src.dependencies import get_current_user
 from src.models.user import User
@@ -58,6 +59,7 @@ from src.schemas.chat import (
 from src.services.answer_validator import validate_answer
 from src.services.chat_orchestrator import ChatOrchestrator, StreamPlan
 from src.services.chat_service import ChatService
+from src.services.quota_service import QuotaService
 from src.services.doc_summary_service import DocSummaryService
 from src.services.prompt_builder import PromptBuilder
 from src.services.question_analyzer import QuestionAnalyzer
@@ -164,7 +166,9 @@ def _get_orchestrator(
     status_code=status.HTTP_201_CREATED,
     summary="Create a new chat session",
 )
+@limiter.limit(setting_limit("rate_limit_chat_create"))
 async def create_chat(
+    request: Request,
     payload: CreateChatRequest,
     current_user: User = Depends(get_current_user),
     chat_service: ChatService = Depends(_get_chat_service),
@@ -267,7 +271,9 @@ async def get_messages(
     response_model=QueryResponse,
     summary="Send a query and get a complete answer (non-streaming)",
 )
+@limiter.shared_limit(chat_limit, scope=QUESTION_SCOPE)
 async def query(
+    request: Request,
     chat_id: uuid.UUID,
     payload: ChatQueryRequest,
     current_user: User = Depends(get_current_user),
@@ -280,8 +286,9 @@ async def query(
     """
     chat_service = ChatService(db)
 
-    # Verify ownership + load chat
-    chat = await chat_service.get_chat(chat_id, current_user)
+    # Verify ownership and current membership, then the daily question quota
+    chat = await chat_service.get_chat_for_question(chat_id, current_user)
+    await QuotaService(db).check_question(current_user)
 
     # Load history for context
     history = await chat_service.load_history(chat_id)
@@ -360,7 +367,9 @@ async def query(
     summary="Stream a RAG answer via Server-Sent Events (SSE)",
     response_class=StreamingResponse,
 )
+@limiter.shared_limit(chat_limit, scope=QUESTION_SCOPE)
 async def stream_query(
+    request: Request,
     chat_id: uuid.UUID,
     query: str = Query(..., min_length=1, max_length=4000),
     document_ids: str | None = Query(
@@ -388,6 +397,11 @@ async def stream_query(
         })
     """
     doc_id_list = [d.strip() for d in document_ids.split(",")] if document_ids else None
+
+    # Access and quota errors must be a normal JSON error response, so they
+    # are checked before the stream starts (afterwards the status is 200).
+    await ChatService(db).get_chat_for_question(chat_id, current_user)
+    await QuotaService(db).check_question(current_user)
 
     return StreamingResponse(
         _sse_generator(

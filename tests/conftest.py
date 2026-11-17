@@ -49,6 +49,9 @@ os.environ.setdefault("STORAGE_BACKEND", "minio")
 # Tests must never hard-abort on missing deps regardless of what .env
 # says — readiness failures should surface per-test, not at app boot.
 os.environ["STRICT_STARTUP"] = "false"
+# Every TestClient request comes from the same address, so shared limits
+# would throttle unrelated tests. Rate-limit tests switch the limiter on.
+os.environ["RATE_LIMIT_ENABLED"] = "false"
 
 
 @pytest.fixture
