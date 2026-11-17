@@ -43,6 +43,18 @@ class RenderedPage:
 _CROP_PAD_X = 14.0
 _CROP_PAD_Y = 12.0
 
+# Upper bound on rendered pixels (about 4000 x 4000). A PDF page can be up to
+# 14400 points square, which at scale 3 would be a 1.9-gigapixel image. A
+# normal A4 page at scale 3 is about 4.5 megapixels, so this never bites
+# real documents.
+MAX_RENDER_PIXELS = 16_000_000
+
+
+def _capped_scale(width_pt: float, height_pt: float, scale: float) -> float:
+    """Largest scale <= `scale` that keeps the image within MAX_RENDER_PIXELS."""
+    area = max(width_pt * height_pt, 1.0)
+    return min(scale, (MAX_RENDER_PIXELS / area) ** 0.5)
+
 
 def render_pdf_page(
     pdf_bytes: bytes,
@@ -95,7 +107,18 @@ def render_pdf_page(
                     & page.rect
                 )
 
-        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), annots=True, clip=clip)
+        region = clip or page.rect
+        safe_scale = _capped_scale(region.width, region.height, scale)
+        if safe_scale < scale:
+            log.info(
+                "page_render_scale_capped",
+                page=page_number,
+                requested=scale,
+                used=round(safe_scale, 3),
+            )
+        pix = page.get_pixmap(
+            matrix=fitz.Matrix(safe_scale, safe_scale), annots=True, clip=clip
+        )
         return RenderedPage(
             png=pix.tobytes("png"),
             page_count=doc.page_count,
