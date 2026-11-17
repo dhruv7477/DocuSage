@@ -9,6 +9,8 @@
 # Generated with pip freeze in a python:3.12-slim container on linux/arm64,
 # from releases at least two weeks old, with torch from the CPU-only index.
 # The "+cpu" label is dropped so the pin also matches a plain PyPI install.
+# setuptools is pinned by hand (pip freeze leaves it out): torch and
+# grpcio-tools need it, and the copy on the CPU-only index is old.
 # To refresh after changing a requirements file (set the date to two weeks
 # before today):
 #   docker run --rm -v "$PWD":/repo:ro -w /repo python:3.12-slim sh -c '
@@ -129,6 +131,7 @@ scikit-learn==1.9.1
 scipy==1.18.1
 sentence-transformers==6.2.0
 sentry-sdk==2.17.0
+setuptools==84.2.1
 shellingham==1.5.4
 six==1.17.0
 slowapi==0.1.10

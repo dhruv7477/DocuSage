@@ -7,7 +7,9 @@ FROM node:22.23.3-alpine AS build
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+# No lifecycle scripts: nothing in the build needs them, and they would run
+# code from every package at install time.
+RUN npm ci --ignore-scripts --no-audit --no-fund
 
 COPY tsconfig.json tsconfig.node.json vite.config.ts tailwind.config.js postcss.config.js ./
 COPY src ./src
@@ -17,8 +19,32 @@ ARG VITE_GOOGLE_CLIENT_ID=""
 ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
 RUN npm run build
 
+# ── Caddy Stage ────────────────────────────────────────────────────
+# The same Caddy release, rebuilt with golang.org/x/net v0.62.0: the
+# official 2.11.9 binary is built with v0.60.0, which has a known
+# vulnerability. Drop the --replace once a Caddy release ships v0.62.0 or
+# later (Trivy in .github/workflows/security.yml shows when).
+FROM caddy:2.11.9-builder-alpine AS caddy
+RUN xcaddy build v2.11.9 \
+    --replace golang.org/x/net=golang.org/x/net@v0.62.0 \
+    --output /usr/bin/caddy
+
 # ── Runtime Stage ──────────────────────────────────────────────────
-FROM caddy:2.11.6-alpine
+FROM caddy:2.11.9-alpine
+
+# Security fixes released since the base image was built.
+RUN apk upgrade --no-cache
+
+# The rebuilt binary, allowed to bind ports 80 and 443 without root.
+COPY --from=caddy /usr/bin/caddy /usr/bin/caddy
+RUN apk add --no-cache libcap \
+    && setcap cap_net_bind_service=+ep /usr/bin/caddy \
+    && apk del libcap \
+    && caddy version
 
 COPY docker/caddy/Caddyfile /etc/caddy/Caddyfile
 COPY --from=build /app/dist /srv
+
+# Run as an unprivileged user. The base image leaves /data/caddy and
+# /config/caddy writable for certificates and settings.
+USER 10001:10001
