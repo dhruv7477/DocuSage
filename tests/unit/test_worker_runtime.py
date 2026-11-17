@@ -74,3 +74,11 @@ def test_worker_without_queue_flag_consumes_ingestion_and_default() -> None:
     assert set(celery_app.amqp.queues) >= {"ingestion", "default"}
     route = celery_app.amqp.router.route({}, "src.workers.tasks.ingest_document_task")
     assert route["queue"].name == "ingestion"
+
+
+def test_each_queue_has_its_own_routing_key() -> None:
+    from src.workers.celery_app import celery_app
+
+    keys = {name: q.routing_key for name, q in celery_app.amqp.queues.items()}
+    assert keys["ingestion"] == "ingestion"
+    assert keys["default"] == "default"

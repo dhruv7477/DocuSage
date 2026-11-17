@@ -62,7 +62,11 @@ celery_app.conf.update(
     # Silence Celery 5→6 migration warning about broker retry behaviour
     broker_connection_retry_on_startup=True,
     # Routing
-    task_queues=(Queue("ingestion"), Queue("default")),
+    # Distinct routing keys, so a message bound for one queue never matches the other.
+    task_queues=(
+        Queue("ingestion", routing_key="ingestion"),
+        Queue("default", routing_key="default"),
+    ),
     task_default_queue="default",
     task_routes={
         "src.workers.tasks.ingest_document_task": {"queue": "ingestion"},
