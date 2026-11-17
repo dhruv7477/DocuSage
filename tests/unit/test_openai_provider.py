@@ -37,7 +37,7 @@ def _completion(text: str) -> dict:
 
 
 def _provider(
-    handler, max_retries: int = 2
+    handler, max_retries: int = 2, reasoning_effort: str = ""
 ) -> tuple[OpenAIProvider, list[httpx.Request]]:
     seen: list[httpx.Request] = []
 
@@ -52,6 +52,7 @@ def _provider(
         base_url=GROQ,
         max_retries=max_retries,
         http_client=client,
+        reasoning_effort=reasoning_effort,
     )
     return provider, seen
 
@@ -76,6 +77,20 @@ async def test_json_mode_asks_for_a_json_object() -> None:
     await provider.generate(MESSAGES, LLMConfig(response_format="json"))
 
     assert json.loads(seen[0].content)["response_format"] == {"type": "json_object"}
+
+
+async def test_reasoning_effort_is_sent_only_when_set() -> None:
+    def ok(req: httpx.Request, n: int) -> httpx.Response:
+        return httpx.Response(200, json=_completion("ok"))
+
+    plain, plain_seen = _provider(ok)
+    low, low_seen = _provider(ok, reasoning_effort="low")
+
+    await plain.generate(MESSAGES)
+    await low.generate(MESSAGES)
+
+    assert "reasoning_effort" not in json.loads(plain_seen[0].content)
+    assert json.loads(low_seen[0].content)["reasoning_effort"] == "low"
 
 
 async def test_a_429_is_retried_and_then_succeeds() -> None:

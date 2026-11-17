@@ -47,10 +47,14 @@ class OpenAIProvider(BaseLLMProvider):
         base_url: str = "",
         max_retries: int = 2,
         http_client: httpx.AsyncClient | None = None,
+        reasoning_effort: str = "",
     ) -> None:
         if not api_key:
             raise ValueError("OPENAI_API_KEY is required for the OpenAI provider.")
         self._model = model
+        # Sent only when set: reasoning models (gpt-oss on Groq, OpenAI o-series)
+        # count their reasoning toward the token limits.
+        self._reasoning_effort = reasoning_effort
         self._service = urlsplit(base_url).hostname if base_url else "api.openai.com"
         self._client = AsyncOpenAI(
             api_key=api_key,
@@ -88,11 +92,13 @@ class OpenAIProvider(BaseLLMProvider):
             )
         return LLMProviderError("The AI service failed.", detail=str(exc))
 
-    @staticmethod
-    def _request(cfg: LLMConfig) -> dict:
+    def _request(self, cfg: LLMConfig) -> dict:
         extra: dict = {}
         if cfg.response_format == "json":
             extra["response_format"] = {"type": "json_object"}
+        if self._reasoning_effort:
+            # extra_body: the pinned SDK predates the typed parameter.
+            extra["extra_body"] = {"reasoning_effort": self._reasoning_effort}
         return extra
 
     async def generate(

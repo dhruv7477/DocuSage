@@ -133,6 +133,10 @@ class Settings(BaseSettings):
     # Retries for transient upstream errors and 429s (the SDK honours
     # Retry-After between attempts).
     llm_max_retries: int = Field(default=2, ge=0, le=10)
+    # reasoning_effort for reasoning models on the openai provider (gpt-oss
+    # on Groq, OpenAI o-series). Their reasoning tokens count toward rate
+    # limits, so "low" stretches a free tier. Empty: not sent.
+    llm_reasoning_effort: Literal["", "low", "medium", "high"] = ""
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-3-5-sonnet-20241022"
 
