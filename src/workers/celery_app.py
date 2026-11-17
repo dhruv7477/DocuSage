@@ -52,8 +52,16 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     # Reliability
-    task_acks_late=True,  # Re-queue if worker crashes mid-task
-    task_reject_on_worker_lost=True,  # Re-queue if worker process dies
+    # Ack after the task runs, so a message is not lost if the broker
+    # connection drops mid-task.
+    task_acks_late=True,
+    # When a pool process dies mid-task (out of memory, a crashing parser),
+    # ack and fail the task instead of redelivering it. A file that kills
+    # the worker would otherwise crash-loop ingestion for every user. The
+    # stale sweep marks the document FAILED and the user can re-upload it.
+    # If the whole worker goes down (VM restart), the unacked message is
+    # still redelivered by the broker.
+    task_reject_on_worker_lost=False,
     worker_prefetch_multiplier=1,  # One task at a time per worker (prevents OOM for large models)
     # Timeouts
     task_soft_time_limit=600,  # 10 min soft limit (sends SIGTERM)
