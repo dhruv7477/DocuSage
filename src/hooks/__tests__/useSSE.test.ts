@@ -148,3 +148,53 @@ describe('useSSE event contract', () => {
     expect(result.current.content).toBe('partial')
   })
 })
+
+describe('useSSE refused streams', () => {
+  type OpenOptions = SSEOptions & { onopen: (r: Response) => Promise<void> }
+
+  async function openWith(response: Response) {
+    const { result, options } = startStream()
+    const opts = options() as OpenOptions
+    let thrown: unknown = null
+    await act(async () => {
+      try {
+        await opts.onopen(response)
+      } catch (err) {
+        thrown = err
+        // fetchEventSource passes the onopen error to onerror next
+        try {
+          opts.onerror(err as Error)
+        } catch {
+          // onerror rethrows to stop retries
+        }
+      }
+    })
+    return { result, thrown }
+  }
+
+  it('shows the server message when the daily quota is used up', async () => {
+    const { result, thrown } = await openWith(
+      new Response(JSON.stringify({ error_code: 'QUOTA_EXCEEDED', message: 'Daily question limit reached (30 per day).' }), {
+        status: 429,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    expect(thrown).not.toBeNull()
+    expect(result.current.streaming).toBe(false)
+    expect(result.current.error).toBe('Daily question limit reached (30 per day).')
+  })
+
+  it('falls back to a status-based message for a plain 429', async () => {
+    const { result } = await openWith(new Response('slow down', { status: 429 }))
+    expect(result.current.error).toBe('Too many requests. Please wait a moment and try again.')
+  })
+
+  it('accepts a real event stream', async () => {
+    const { result, thrown } = await openWith(
+      new Response('', { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    )
+    expect(thrown).toBeNull()
+    expect(result.current.streaming).toBe(true)
+    expect(result.current.error).toBeNull()
+  })
+})
