@@ -1,0 +1,26 @@
+# Test-only override for docker/docker-compose.demo.yml: a mock
+# OpenAI-compatible LLM replaces Groq, so CI needs no API key.
+#
+#   docker compose -f docker/docker-compose.demo.yml -f tests/e2e/compose.e2e.yml up -d --build --wait
+#
+# docker/.env must set LLM_BASE_URL=http://mock-llm:8080/v1.
+# Paths are relative to docker/, the directory of the first compose file.
+
+services:
+  mock-llm:
+    image: python:3.12-slim
+    command: ["python", "/mock_llm.py"]
+    environment:
+      MOCK_MODEL_IDS: "${LLM_MODEL},${ROUTER_MODEL},${SUMMARY_MODEL}"
+    volumes:
+      - ../tests/e2e/mock_llm.py:/mock_llm.py:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/v1/models')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    depends_on:
+      mock-llm:
+        condition: service_healthy
