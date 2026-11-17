@@ -7,9 +7,13 @@ Design: Routes are intentionally thin — no business logic here.
 Every route does: validate input → call service → return schema.
 """
 
+import uuid
+from collections.abc import Callable
+
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.configs.config import get_settings
 from src.core.rate_limit import client_ip_key, limiter, setting_limit
 from src.db.session import get_db
 from src.dependencies import get_current_user
@@ -29,6 +33,15 @@ from src.services.auth_service import AuthService
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
+def _new_user_hook() -> Callable[[uuid.UUID], None] | None:
+    """In demo mode, every new account is queued for the sample documents."""
+    if not get_settings().demo_mode:
+        return None
+    from src.workers.demo_tasks import queue_sample_documents
+
+    return queue_sample_documents
+
+
 @router.post(
     "/register",
     response_model=RegisterResponse,
@@ -41,7 +54,7 @@ async def register(
     payload: RegisterRequest,
     db: AsyncSession = Depends(get_db),
 ) -> RegisterResponse:
-    service = AuthService(db)
+    service = AuthService(db, on_user_created=_new_user_hook())
     user = await service.register(payload)
     return RegisterResponse(user=UserResponse.model_validate(user))
 
@@ -72,7 +85,7 @@ async def google_login(
     payload: GoogleLoginRequest,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
-    service = AuthService(db)
+    service = AuthService(db, on_user_created=_new_user_hook())
     return await service.google_login(payload)
 
 

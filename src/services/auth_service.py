@@ -17,6 +17,7 @@ Design:
 """
 
 import uuid
+from collections.abc import Callable
 
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
@@ -60,8 +61,19 @@ class AuthService:
     All methods are async to match the async DB driver.
     """
 
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(
+        self,
+        db: AsyncSession,
+        on_user_created: Callable[[uuid.UUID], None] | None = None,
+    ) -> None:
         self._db = db
+        # Called with the new user's ID after any sign-up (email or Google),
+        # e.g. to queue the demo's sample documents.
+        self._on_user_created = on_user_created
+
+    def _user_created(self, user: User) -> None:
+        if self._on_user_created is not None:
+            self._on_user_created(user.id)
 
     # ── Registration ──────────────────────────────────────────────
 
@@ -91,6 +103,7 @@ class AuthService:
         await self._db.flush()  # get ID without full commit
 
         log.info("user_registered", user_id=str(user.id), email=user.email)
+        self._user_created(user)
         return user
 
     # ── Login ─────────────────────────────────────────────────────
@@ -175,6 +188,7 @@ class AuthService:
             self._db.add(user)
             await self._db.flush()
             log.info("google_user_registered", user_id=str(user.id), email=email)
+            self._user_created(user)
         else:
             if not user.is_active:
                 raise UserInactiveError(
