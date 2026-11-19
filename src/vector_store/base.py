@@ -70,6 +70,15 @@ class SearchFilter:
     )  # Optional: search within specific docs
 
 
+@dataclass(frozen=True)
+class DocumentRef:
+    """One document's place in the vector store: workspace, document and owner."""
+
+    workspace_id: str
+    document_id: str
+    user_id: str
+
+
 class BaseVectorStore(ABC):
     """
     Abstract contract every vector store must satisfy.
@@ -128,6 +137,18 @@ class BaseVectorStore(ABC):
 
         Returns:
             List of SearchResult sorted by score descending.
+        """
+        ...
+
+    @abstractmethod
+    async def copy_document_vectors(
+        self, source: "DocumentRef", target: "DocumentRef"
+    ) -> int:
+        """Copy one document's vectors to another document, owner and workspace.
+
+        Reads only points owned by `source.user_id`, gives every copy a new
+        point ID and the target's IDs in its payload, and creates the target
+        collection if needed. Returns the number of points copied.
         """
         ...
 

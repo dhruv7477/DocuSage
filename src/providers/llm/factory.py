@@ -14,7 +14,8 @@ Switching providers is done exclusively via the LLM_PROVIDER env var.
 Supported:
     ollama    → OllamaProvider   (default, local LLaMA via Ollama)
     vllm      → VLLMProvider     (production, GPU-accelerated)
-    openai    → OpenAIProvider   (plug-in, GPT-4o etc.)
+    openai    → OpenAIProvider   (OpenAI, or any OpenAI-compatible API such as
+                                  Groq via OPENAI_BASE_URL)
 """
 
 from functools import lru_cache
@@ -111,6 +112,8 @@ def _build_llm_provider(model: str) -> BaseLLMProvider:
             api_key=settings.openai_api_key,
             model=model,
             timeout=settings.llm_timeout_seconds,
+            base_url=settings.openai_base_url,
+            max_retries=settings.llm_max_retries,
         )
 
     raise ValueError(

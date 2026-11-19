@@ -135,6 +135,22 @@ export const auth = {
     api.post<TokenResponse>('/auth/google', { credential }),
 }
 
+// ── Demo ──────────────────────────────────────────────────────────
+
+/** GET /api/v1/demo: limits and data handling of a public demo deployment. */
+export interface DemoInfo {
+  enabled: boolean
+  max_documents: number // 0 = unlimited
+  max_upload_mb: number // 0 = unlimited
+  questions_per_day: number // 0 = unlimited
+  wipe_hour_utc: number | null
+  llm_host: string | null
+}
+
+export const demo = {
+  info: () => api.get<DemoInfo>('/demo'),
+}
+
 // ── Workspaces ────────────────────────────────────────────────────
 
 export const workspaces = {

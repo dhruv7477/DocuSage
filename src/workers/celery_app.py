@@ -26,6 +26,7 @@ queue. Subsequent tasks reuse the cached singleton.
 """
 
 from celery import Celery
+from celery.schedules import crontab
 from kombu import Queue
 from celery.signals import worker_process_init, worker_ready
 
@@ -40,7 +41,7 @@ celery_app = Celery(
     "privateai",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["src.workers.tasks"],
+    include=["src.workers.tasks", "src.workers.demo_tasks"],
 )
 
 celery_app.conf.update(
@@ -72,12 +73,18 @@ celery_app.conf.update(
         "src.workers.tasks.ingest_document_task": {"queue": "ingestion"},
         "src.workers.tasks.delete_document_vectors_task": {"queue": "default"},
         "src.workers.tasks.fail_stale_documents_task": {"queue": "default"},
+        "src.workers.demo_tasks.*": {"queue": "default"},
     },
     # Periodic jobs (needs `celery beat`, or a worker started with -B)
     beat_schedule={
         "fail-stale-documents": {
             "task": "src.workers.tasks.fail_stale_documents_task",
             "schedule": 600.0,  # every 10 minutes
+        },
+        # No-op unless DEMO_MODE is on.
+        "demo-nightly-wipe": {
+            "task": "src.workers.demo_tasks.wipe_user_uploads_task",
+            "schedule": crontab(hour=settings.demo_wipe_hour_utc, minute=0),
         },
     },
 )
@@ -118,3 +125,11 @@ def _sweep_stale_documents_on_start(**_kwargs) -> None:
         fail_stale_documents_task.delay()
     except Exception as exc:
         log.warning("stale_sweep_dispatch_failed", error=str(exc))
+
+    if settings.demo_mode:
+        try:
+            from src.workers.demo_tasks import ensure_sample_library_task
+
+            ensure_sample_library_task.delay()
+        except Exception as exc:
+            log.warning("sample_library_dispatch_failed", error=str(exc))

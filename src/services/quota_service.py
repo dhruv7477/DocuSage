@@ -2,7 +2,7 @@
 src/services/quota_service.py
 ─────────────────────────────
 Per-user quotas for public deployments: stored documents, total upload
-size and questions per UTC day.
+size and questions per UTC day. Sample documents do not count.
 
 Every limit is a setting where 0 means unlimited, so self-hosted installs
 have no quotas unless they opt in. Admins and super admins are exempt.
@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.configs.config import Settings, get_settings
 from src.core.exceptions import QuotaExceededError
+from src.demo.samples import library_storage_paths
 from src.models.chat import Chat, Message, MessageRole
 from src.models.document import Document
 from src.models.user import User, UserRole
@@ -91,7 +92,11 @@ class QuotaService:
                 select(
                     func.count(Document.id),
                     func.coalesce(func.sum(Document.file_size_bytes), 0),
-                ).where(Document.user_id == user.id)
+                ).where(
+                    Document.user_id == user.id,
+                    # Sample documents (demo mode) do not count.
+                    Document.storage_path.not_in(library_storage_paths()),
+                )
             )
         ).one()
         return int(row[0]), int(row[1])

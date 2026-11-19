@@ -16,7 +16,7 @@ This means the API responds quickly; ingestion is async.
 import uuid
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.configs.config import get_settings
@@ -244,15 +244,26 @@ class DocumentService:
         """
         document = await self.get_document(document_id, user)
 
-        # Delete from storage (non-fatal if file missing)
-        try:
-            await self._storage.delete(document.storage_path)
-        except Exception as exc:
-            log.warning(
-                "storage_delete_failed",
-                path=document.storage_path,
-                error=str(exc),
+        # Other rows can share this file (every demo account's copy of a
+        # sample document does). Only the last one deletes it.
+        shared_with = await self._db.scalar(
+            select(func.count(Document.id)).where(
+                Document.storage_path == document.storage_path,
+                Document.id != document.id,
             )
+        )
+        if shared_with:
+            log.info("storage_delete_skipped_shared", path=document.storage_path)
+        else:
+            # Delete from storage (non-fatal if file missing)
+            try:
+                await self._storage.delete(document.storage_path)
+            except Exception as exc:
+                log.warning(
+                    "storage_delete_failed",
+                    path=document.storage_path,
+                    error=str(exc),
+                )
 
         await self._db.delete(document)
         log.info(

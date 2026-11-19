@@ -107,6 +107,12 @@ class Settings(BaseSettings):
     vllm_api_key: str = "token-vllm"
     openai_api_key: str = ""
     openai_model: str = "gpt-4o"
+    # Any OpenAI-compatible endpoint, e.g. https://api.groq.com/openai/v1.
+    # Empty means api.openai.com.
+    openai_base_url: str = ""
+    # Retries for transient upstream errors and 429s (the SDK honours
+    # Retry-After between attempts).
+    llm_max_retries: int = Field(default=2, ge=0, le=10)
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-3-5-sonnet-20241022"
 
@@ -253,6 +259,14 @@ class Settings(BaseSettings):
     # the same host (127.0.0.1) may call it, for example
     # `docker compose exec api curl localhost:8000/health/deep`.
     health_deep_public: bool = False
+
+    # ── Public demo ──────────────────────────────────────────────
+    # DEMO_MODE gives every new account the sample documents, deletes all
+    # uploads every night at DEMO_WIPE_HOUR_UTC, and makes GET /api/v1/demo
+    # report the limits so the sign-up page can show them.
+    demo_mode: bool = False
+    demo_samples_dir: str = "demo/samples"
+    demo_wipe_hour_utc: int = Field(default=3, ge=0, le=23)
 
     # ── Observability ────────────────────────────────────────────
     sentry_dsn: str = ""

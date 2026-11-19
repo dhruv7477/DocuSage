@@ -70,7 +70,7 @@ curl -s https://demo.example.com/health
 # {"status":"ok","app":"DocuSage","env":"production"}
 ```
 
-Then open `https://demo.example.com`, sign up, upload a PDF and ask a question.
+Then open `https://demo.example.com` and sign up. The sign-up page shows the demo limits, and the new account gets a "Sample documents" workspace with two public-domain PDFs (they are ingested once when the worker first starts, which takes a few minutes). Ask a question about them, or upload your own PDF.
 
 ## 7. Uptime check
 
@@ -87,7 +87,7 @@ Use any free external monitor, for example UptimeRobot, Better Stack or Healthch
 
 The cron job from `setup-vm.sh` runs `deploy/oracle/backup-db.sh` at 02:30 UTC. It writes `/var/backups/docusage/docusage-<timestamp>.dump` and keeps 7 days of dumps. Its log is `/var/log/docusage-backup.log`.
 
-The dump covers accounts, workspaces, chats and document records. Uploaded files and vectors are not backed up: the demo treats uploads as temporary. Copy dumps off the VM if you want to keep them.
+The dump covers accounts, workspaces, chats and document records. Uploaded files and vectors are not backed up: the demo deletes every upload each night at 03:00 UTC (`DEMO_WIPE_HOUR_UTC`), and the sample documents are rebuilt from `demo/samples/` if they go missing. Copy dumps off the VM if you want to keep them.
 
 To restore a dump:
 

@@ -31,9 +31,16 @@ def _completion_text(body: dict) -> str:
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        if self.path.rstrip("/") == "/v1/models":
+        path = self.path.rstrip("/")
+        if path == "/v1/models":
             data = [{"id": m, "object": "model", "owned_by": "mock"} for m in MODEL_IDS]
             self._json({"object": "list", "data": data})
+        elif (
+            path.startswith("/v1/models/")
+            and path.removeprefix("/v1/models/") in MODEL_IDS
+        ):
+            model = path.removeprefix("/v1/models/")
+            self._json({"id": model, "object": "model", "owned_by": "mock"})
         else:
             self.send_error(404)
 

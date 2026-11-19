@@ -169,6 +169,13 @@ class LLMProviderError(PrivateAIException):
     error_code = "LLM_PROVIDER_ERROR"
 
 
+class LLMRateLimitedError(LLMProviderError):
+    """The hosted LLM refused the call with a rate limit (HTTP 429)."""
+
+    status_code = HTTPStatus.SERVICE_UNAVAILABLE.value
+    error_code = "LLM_RATE_LIMITED"
+
+
 class EmbeddingError(PrivateAIException):
     status_code = HTTPStatus.INTERNAL_SERVER_ERROR.value
     error_code = "EMBEDDING_ERROR"

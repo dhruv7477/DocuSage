@@ -23,6 +23,8 @@ Collection configuration
   remediation hint, instead of silently accepting partial data.
 """
 
+import uuid
+
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qmodels
 from qdrant_client.http.exceptions import UnexpectedResponse
@@ -32,6 +34,7 @@ from src.core.exceptions import EmbeddingDimensionMismatch, VectorStoreError
 from src.core.logger import get_logger
 from src.vector_store.base import (
     BaseVectorStore,
+    DocumentRef,
     SearchFilter,
     SearchResult,
     VectorPayload,
@@ -471,6 +474,90 @@ class QdrantVectorStore(BaseVectorStore):
             ) from exc
 
     # ── Health ────────────────────────────────────────────────────
+
+    async def copy_document_vectors(
+        self, source: DocumentRef, target: DocumentRef
+    ) -> int:
+        """Copy a document's points into another workspace for another owner.
+
+        Used to give each demo account its own copy of the sample documents
+        without embedding them again. The copies are ordinary points of the
+        target owner, so the usual isolation filters apply to them.
+        """
+        src_name = self._collection_name(source.workspace_id)
+        qfilter = qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="document_id",
+                    match=qmodels.MatchValue(value=source.document_id),
+                ),
+                qmodels.FieldCondition(
+                    key="user_id", match=qmodels.MatchValue(value=source.user_id)
+                ),
+            ]
+        )
+        points: list = []
+        offset = None
+        try:
+            while True:
+                batch, offset = await self._client.scroll(
+                    collection_name=src_name,
+                    scroll_filter=qfilter,
+                    limit=256,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=True,
+                )
+                points.extend(batch)
+                if offset is None:
+                    break
+        except UnexpectedResponse as exc:
+            raise VectorStoreError(
+                f"Cannot read source collection '{src_name}'", detail=str(exc)
+            ) from exc
+        if not points:
+            return 0
+
+        new_ids = {str(p.id): str(uuid.uuid4()) for p in points}
+
+        def relink(chunk_id: object) -> str | None:
+            return new_ids.get(str(chunk_id)) if chunk_id else None
+
+        copies = [
+            qmodels.PointStruct(
+                id=new_ids[str(p.id)],
+                vector=p.vector,
+                payload={
+                    **(p.payload or {}),
+                    "user_id": target.user_id,
+                    "workspace_id": target.workspace_id,
+                    "document_id": target.document_id,
+                    "prev_chunk_id": relink((p.payload or {}).get("prev_chunk_id")),
+                    "next_chunk_id": relink((p.payload or {}).get("next_chunk_id")),
+                },
+            )
+            for p in points
+        ]
+        if not await self.collection_exists(target.workspace_id):
+            await self.create_collection(
+                target.workspace_id, dimension=len(points[0].vector)
+            )
+        dst_name = self._collection_name(target.workspace_id)
+        try:
+            await self._client.upsert(
+                collection_name=dst_name, points=copies, wait=True
+            )
+        except UnexpectedResponse as exc:
+            raise VectorStoreError(
+                f"Qdrant upsert failed for collection '{dst_name}'", detail=str(exc)
+            ) from exc
+        log.info(
+            "document_vectors_copied",
+            source_workspace=source.workspace_id,
+            target_workspace=target.workspace_id,
+            count=len(copies),
+        )
+        return len(copies)
 
     async def health(self) -> bool:
         try:
