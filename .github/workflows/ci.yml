@@ -13,7 +13,7 @@ concurrency:
 env:
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "22"
-  RUFF_VERSION: "0.7.0" # keep in step with requirements.txt
+  RUFF_VERSION: "0.7.0" # keep in step with requirements-dev.txt
   TORCH_VERSION: "2.4.1" # keep in step with requirements.txt
   DOCKER_IMAGE: docusage-api
 
@@ -67,7 +67,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu
-          pip install -r requirements.txt -c constraints.txt
+          pip install -r requirements-dev.txt -c constraints.txt
 
       - name: Run unit tests
         run: pytest tests/unit/ --tb=short -x
@@ -81,7 +81,7 @@ jobs:
       SECRET_KEY: test-secret-key-that-is-long-enough-32chars
       POSTGRES_HOST: localhost
       POSTGRES_PORT: "5432"
-      POSTGRES_DB: privateai_test
+      POSTGRES_DB: docusage_test
       POSTGRES_USER: docusage_user
       POSTGRES_PASSWORD: testpassword
       REDIS_URL: redis://localhost:6379/0
@@ -95,12 +95,12 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_DB: privateai_test
+          POSTGRES_DB: docusage_test
           POSTGRES_USER: docusage_user
           POSTGRES_PASSWORD: testpassword
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U docusage_user -d privateai_test"
+          --health-cmd "pg_isready -U docusage_user -d docusage_test"
           --health-interval 5s --health-timeout 5s --health-retries 20
       redis:
         image: redis:7-alpine
@@ -124,7 +124,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu
-          pip install -r requirements.txt -c constraints.txt
+          pip install -r requirements-dev.txt -c constraints.txt
 
       # S3 storage for tests/integration/test_storage_s3.py. A step, not a
       # service container, because it needs a custom entrypoint.

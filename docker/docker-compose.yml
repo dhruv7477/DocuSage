@@ -1,12 +1,12 @@
 # ════════════════════════════════════════════════════════════════
-#  PrivateAI — Local Development Stack
+#  DocuSage: local development stack
 #  Starts: FastAPI, PostgreSQL, Qdrant, Redis, SeaweedFS (S3), Ollama
 #  Published ports bind to 127.0.0.1 only. Do not use this file on a
 #  public server; use docker-compose.demo.yml there.
 # ════════════════════════════════════════════════════════════════
 
 networks:
-  privateai-net:
+  docusage-net:
     driver: bridge
 
 volumes:
@@ -23,7 +23,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: privateai-api
+    container_name: docusage-api
     ports:
       - "127.0.0.1:8000:8000"
     env_file:
@@ -52,7 +52,7 @@ services:
     volumes:
       - ..:/src
     networks:
-      - privateai-net
+      - docusage-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
@@ -66,7 +66,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: privateai-worker
+    container_name: docusage-worker
     env_file:
       - ../.env
     environment:
@@ -84,7 +84,7 @@ services:
     volumes:
       - ..:/src
     networks:
-      - privateai-net
+      - docusage-net
     restart: unless-stopped
     healthcheck:
       disable: true
@@ -93,7 +93,7 @@ services:
   # ── PostgreSQL ────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
-    container_name: privateai-postgres
+    container_name: docusage-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-docusage}
       POSTGRES_USER: ${POSTGRES_USER:-docusage_user}
@@ -103,7 +103,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
-      - privateai-net
+      - docusage-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-docusage_user} -d ${POSTGRES_DB:-docusage}"]
@@ -114,14 +114,14 @@ services:
   # ── Qdrant Vector DB ──────────────────────────────────────────
   qdrant:
     image: qdrant/qdrant:v1.11.3
-    container_name: privateai-qdrant
+    container_name: docusage-qdrant
     ports:
       - "127.0.0.1:6333:6333"   # REST API
       - "127.0.0.1:6334:6334"   # gRPC
     volumes:
       - qdrant_data:/qdrant/storage
     networks:
-      - privateai-net
+      - docusage-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6333' 2>/dev/null"]
@@ -132,13 +132,13 @@ services:
   # ── Redis ─────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
-    container_name: privateai-redis
+    container_name: docusage-redis
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     networks:
-      - privateai-net
+      - docusage-net
     restart: unless-stopped
     command: redis-server --save 20 1 --loglevel warning
     healthcheck:
@@ -155,7 +155,7 @@ services:
   # MINIO_SECRET_KEY in .env.
   seaweedfs:
     image: chrislusf/seaweedfs:4.51
-    container_name: privateai-seaweedfs
+    container_name: docusage-seaweedfs
     ports:
       - "127.0.0.1:9000:8333"   # S3 API
     environment:
@@ -166,7 +166,7 @@ services:
       - seaweedfs_data:/data
       - ./seaweedfs/start.sh:/start.sh:ro
     networks:
-      - privateai-net
+      - docusage-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8333/healthz"]
@@ -177,13 +177,13 @@ services:
   # ── Ollama (LLaMA + Embeddings) ───────────────────────────────
   ollama:
     image: ollama/ollama:latest
-    container_name: privateai-ollama
+    container_name: docusage-ollama
     ports:
       - "127.0.0.1:11434:11434"
     volumes:
       - ollama_data:/root/.ollama
     networks:
-      - privateai-net
+      - docusage-net
     restart: unless-stopped
     # Ollama keeps the 7B (~4.6 GB) + 1.5B router (~1.1 GB) resident, so it
     # needs ~7-8 GB. This cap only helps if the WSL2 VM itself has the RAM —
@@ -217,12 +217,12 @@ services:
   # would fail because the model wasn't downloaded.
   ollama-bootstrap:
     image: ollama/ollama:latest
-    container_name: privateai-ollama-bootstrap
+    container_name: docusage-ollama-bootstrap
     depends_on:
       ollama:
         condition: service_healthy
     networks:
-      - privateai-net
+      - docusage-net
     environment:
       OLLAMA_HOST: http://ollama:11434
       LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b-instruct}
