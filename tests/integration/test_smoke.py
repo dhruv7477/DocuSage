@@ -234,7 +234,7 @@ class TestSmokePipeline:
         assert state["workspace_id"] in ids
 
     def test_07_upload_document(self, client, state):
-        """Upload a text document — Celery dispatch is mocked.
+        """Upload a text document. Celery dispatch is mocked.
 
         The worker reads the row in its own transaction, so the row must
         already be committed when the task is queued.

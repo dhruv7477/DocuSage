@@ -5,7 +5,7 @@
 # Safe to re-run: every step checks before it changes anything.
 #
 # Usage, from the cloned repo:  sudo deploy/oracle/setup-vm.sh
-# Options (environment): SWAP_SIZE=4G  BACKUP_DIR=/var/backups/docusage
+# Options (environment): SWAP_SIZE=4G  SWAP_FILE=/swapfile  BACKUP_DIR=/var/backups/docusage
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -15,6 +15,7 @@ fi
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 SWAP_SIZE="${SWAP_SIZE:-4G}"
+SWAP_FILE="${SWAP_FILE:-/swapfile}"
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/docusage}"
 IPTABLES_RULES=/etc/iptables/rules.v4
 
@@ -47,16 +48,16 @@ install_docker() {
 
 add_swap() {
   log "Swap"
-  if swapon --show=NAME --noheadings | grep -qx /swapfile; then
-    echo "/swapfile is already active."
+  if swapon --show=NAME --noheadings | grep -qxF "$SWAP_FILE"; then
+    echo "$SWAP_FILE is already active."
   else
-    fallocate -l "$SWAP_SIZE" /swapfile
-    chmod 600 /swapfile
-    mkswap /swapfile >/dev/null
-    swapon /swapfile
-    echo "Created a $SWAP_SIZE swap file."
+    fallocate -l "$SWAP_SIZE" "$SWAP_FILE"
+    chmod 600 "$SWAP_FILE"
+    mkswap "$SWAP_FILE" >/dev/null
+    swapon "$SWAP_FILE"
+    echo "Created a $SWAP_SIZE swap file at $SWAP_FILE."
   fi
-  grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  grep -qF "$SWAP_FILE none swap" /etc/fstab || echo "$SWAP_FILE none swap sw 0 0" >> /etc/fstab
   # Swap is a safety net for build spikes, not working memory.
   echo 'vm.swappiness=10' > /etc/sysctl.d/99-docusage-swap.conf
   sysctl -q -p /etc/sysctl.d/99-docusage-swap.conf
