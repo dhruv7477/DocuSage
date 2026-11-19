@@ -200,15 +200,16 @@ class Settings(BaseSettings):
     rag_history_tokens: int = 1000
     # DocSummaryService (map-reduce over a document's chunks).
     # Material up to this many tokens is summarized in ONE streamed pass;
-    # larger docs are split into window-sized parts and map-reduced. Both
-    # budgets are kept under the model context window (Ollama defaults to
-    # num_ctx=4096) minus room for the prompt + generated tokens, so no
-    # call silently truncates. Bigger docs split into more parts, but the
-    # map phase runs those calls CONCURRENTLY (see summary_map_concurrency),
-    # so wall-clock time stays bounded regardless of part count.
-    summary_context_token_budget: int = 3200
-    # Per-part input budget during the (parallel) map phase.
-    summary_map_token_budget: int = 3200
+    # larger docs are split into parts and map-reduced (also streamed). The
+    # binding constraint per call is prefill / time-to-first-token, which
+    # must fit summary_timeout_seconds; the streamed decode after that is
+    # not time-bounded. So parts are kept small enough that even a slow CPU
+    # produces the first token well inside the timeout (~2400 tok ≈ a few
+    # minutes of prefill at ~15 tok/s, with margin for load). Also stays
+    # under the model context window (Ollama default num_ctx=4096).
+    summary_context_token_budget: int = 2400
+    # Per-part input (prefill) budget during the map phase.
+    summary_map_token_budget: int = 2400
     # Max in-flight map calls (asyncio.gather is bounded by this).
     # Default 1 = sequential, which is correct for CPU inference: parallel
     # LLM calls don't reduce wall-clock on a single CPU (the cores are

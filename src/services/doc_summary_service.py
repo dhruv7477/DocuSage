@@ -16,8 +16,10 @@ Algorithm
    real documents, and far faster on a CPU model than N map calls.
 3. Otherwise MAP: pack consecutive chunks into `summary_map_token_budget`
    segments (never splitting a chunk, never mixing documents) and
-   bullet-point each segment with a non-streaming LLM call. Sequential on
-   purpose — local CPU Ollama serializes requests anyway.
+   bullet-point each segment with a streamed LLM call, so only the time
+   to the first token has to fit the timeout. At most
+   `summary_map_concurrency` calls run at once (default 1, because a
+   local CPU Ollama serializes requests anyway).
 4. REDUCE: join the bullets; if still over the context budget, one more
    map round (2 levels max, then hard-truncate — logged).
 5. FINAL (the "Executive Summary agent"): one streamed LLM call that
@@ -246,16 +248,25 @@ class DocSummaryService:
         map_config = LLMConfig(temperature=0.2, max_tokens=self._section_max_tokens)
 
         async def _one(segment: str) -> str:
+            # Stream, don't generate(): a non-streaming call must deliver the
+            # whole response (prefill + every decode token) inside ONE read
+            # timeout, so on a slow CPU the decode tail pushes a fine-prefill
+            # call past the limit. Streaming resets the read clock per token,
+            # so only time-to-first-token (the prefill) must fit the timeout
+            # and the decode can take as long as it needs. Accumulate the
+            # streamed bullets back into the string the reduce step expects.
             async with sem:
-                response = await self._llm.generate(
+                parts: list[str] = []
+                async for token in self._llm.stream(
                     [
                         LLMMessage(role="system", content=_MAP_SYSTEM_PROMPT),
                         LLMMessage(role="user", content=segment),
                     ],
                     map_config,
                     timeout=self._timeout,
-                )
-            return response.content.strip()
+                ):
+                    parts.append(token)
+            return "".join(parts).strip()
 
         return list(await asyncio.gather(*(_one(s) for s in segments)))
 
