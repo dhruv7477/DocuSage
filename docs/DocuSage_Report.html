@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DocuSage: Business Case Study and Technical Deep Dive</title>
+<style>
+  :root { --ink:#1a2233; --muted:#5b6b86; --accent:#0e8f86; --accent2:#7c4dff; --line:#dbe3ee; --bg-soft:#f5f8fc; }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink); line-height: 1.5; margin: 0;
+    font-size: 11pt;
+  }
+  .page { max-width: 800px; margin: 0 auto; padding: 28px 36px; }
+  h1 { font-size: 22pt; margin: 0 0 4px; letter-spacing: -0.3px; }
+  h2 { font-size: 14pt; margin: 22px 0 6px; padding-bottom: 4px; border-bottom: 2px solid var(--accent); color: #0c3b54; }
+  h3 { font-size: 11.5pt; margin: 14px 0 4px; color: #133; }
+  p, li { color: var(--ink); }
+  .sub { color: var(--muted); font-size: 10pt; margin: 0 0 2px; }
+  .tagline { font-style: italic; color: var(--muted); }
+  .cover { padding: 40px 36px 18px; border-bottom: 3px solid var(--accent); background: linear-gradient(180deg,#f0fbfa,#ffffff); }
+  .pill { display:inline-block; font-size: 8.5pt; font-weight:600; background:#e6f7f4; border:1px solid #b8e6df; border-radius:999px; padding:2px 9px; margin-right:6px; color:#0a6b62;}
+  .pill.alt { color:#5a35c9; background:#f0ebff; border-color:#d8caff; }
+  pre {
+    background: #0d1424; color: #d7e6ff; border-radius: 8px; padding: 12px 14px;
+    font-family: "JetBrains Mono", Consolas, "Courier New", monospace; font-size: 8.6pt; line-height:1.35;
+    overflow-x: auto; white-space: pre; border:1px solid #1c2c4a;
+  }
+  code { font-family: "JetBrains Mono", Consolas, monospace; background: var(--bg-soft); padding: 1px 5px; border-radius: 4px; font-size: 9.2pt; color:#0c3b54;}
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 9.4pt; }
+  th, td { border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top; }
+  th { background: var(--bg-soft); color:#0c3b54; }
+  ul { margin: 4px 0 8px; padding-left: 20px; }
+  li { margin: 2px 0; }
+  .note { background: #fff8e6; border-left: 4px solid #f1b500; padding: 8px 12px; border-radius: 4px; font-size: 9.6pt; margin: 10px 0; }
+  .page-break { page-break-before: always; }
+  footer { margin-top: 22px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 8.5pt; text-align:center; }
+  @page { size: A4; margin: 14mm; }
+  @media print { .cover { background: #f0fbfa !important; } }
+</style>
+</head>
+<body>
+
+<div class="cover">
+  <p class="sub">BUSINESS CASE STUDY &amp; TECHNICAL DEEP DIVE</p>
+  <h1>DocuSage</h1>
+  <p class="tagline">Turning your documents into a trusted expert you can just <em>ask</em>.</p>
+  <p style="margin-top:10px;">
+    <span class="pill">Private RAG platform</span>
+    <span class="pill">Routed workflow</span>
+    <span class="pill alt">Cited &amp; grounded answers</span>
+  </p>
+</div>
+
+<div class="page">
+
+<h1 style="font-size:16pt;margin-top:8px;">Part 1: Business Case Study</h1>
+
+<h2>Executive Summary</h2>
+<p>Every organization sits on a mountain of documents: contracts, policies, manuals, reports. The knowledge inside them is locked away, findable only by whoever remembers which file it's in. <strong>DocuSage</strong> turns that pile into a private, conversational expert: upload your documents, ask questions in plain English, and get clear answers <strong>backed only by your own files</strong>, with the exact source passage shown as proof. It's the convenience of a chatbot without the two things that make generic AI risky for business: making things up, and leaking your data.</p>
+
+<h2>Business Challenges</h2>
+<p>Before DocuSage, finding answers inside documents meant:</p>
+<ul>
+  <li><strong>Hours of manual hunting.</strong> Staff scrolled through long PDFs to find one clause or figure.</li>
+  <li><strong>Knowledge bottlenecks.</strong> Only a few experts knew where things lived; when they were out, work stalled.</li>
+  <li><strong>Risky shortcuts.</strong> Public AI tools could <em>invent</em> confident-sounding but wrong answers, and pasting confidential documents into them exposed sensitive data.</li>
+  <li><strong>No trust, no audit trail.</strong> Even when an answer was found, there was no easy way to prove <em>where</em> it came from.</li>
+</ul>
+
+<h2>Solution Approach</h2>
+<p>DocuSage reads your documents once, indexes them, and then answers questions about them on demand. Behind the simple chat box is a short relay of focused steps, like a well-run research desk: one step works out what you're really asking, another digs up the most relevant evidence, another writes the answer, and a final check confirms it cites real sources. Only the writing (and summarizing) uses a language model; the routing is rules first, and the final check is a program, not another AI call. Every answer is <strong>grounded in your documents and cited</strong>, and if the documents don't contain the answer, DocuSage <strong>says so instead of guessing</strong>. Everything stays in your private, walled-off workspace.</p>
+
+<h2>The Workflow (Simplified)</h2>
+<pre>            ┌──────────────────────── DocuSage ────────────────────────┐
+  Upload ─▶ │  📥 Librarian: reads · splits · files every document      │
+            └───────────────────────────┬───────────────────────────────┘
+                                         │  (indexed &amp; ready to search)
+                                         ▼
+  Question ─▶ 🧭 Router ─┬─ a question  ─▶ 🔎 Researcher ─▶ ✍️ Writer ──┐
+                         ├─ a summary   ─▶ 📚 Summarizer ───────────────┤─▶ ✅ Citation check ─▶ 📎 Cited Answer
+                         └─ small talk  ─▶ 💬 Quick reply ──────────────┘</pre>
+<p>Think of it as a relay, each step doing one job well:</p>
+<ul>
+  <li><strong>📥 The Librarian</strong> reads each uploaded file (PDF, Word, plain text, Markdown or HTML), breaks it into bite-sized passages, and files them so they can be found instantly later. This runs in the background, with live progress in the app.</li>
+  <li><strong>🧭 The Router</strong> decides what you actually want: a specific answer, a whole-document summary, or just a friendly hello. Clear cases are recognized by rules at no cost; an AI classifier can be switched on for harder ones.</li>
+  <li><strong>🔎 The Researcher</strong> searches your documents two ways at once (by <em>meaning</em> and by <em>keyword</em>), re-ranks the results to surface the best evidence, and declines if nothing relevant turns up.</li>
+  <li><strong>✍️ The Writer</strong> composes an answer using <em>only</em> that evidence, attaching citations that link back to the exact page and passage.</li>
+  <li><strong>📚 The Summarizer</strong>, for an overview request, reads the whole document in sections and distills an executive summary. A deployment can switch summaries off to save model capacity.</li>
+  <li><strong>✅ The Citation check</strong> is a program that verifies every citation points to a real source and that the answer kept the "decline when unsure" promise.</li>
+</ul>
+<p>The result streams back live, with a <strong>"Check source" preview</strong> showing a snapshot of the actual document page with the passage highlighted, so you can trust, and verify, in one glance.</p>
+
+<h2>Technical Implementation Plan</h2>
+<ul>
+  <li><strong>Architecture:</strong> a FastAPI (Python) backend with a React/TypeScript front end; a <code>ChatOrchestrator</code> routes each turn to the right step rather than relying on one giant prompt.</li>
+  <li><strong>Document pipeline:</strong> uploads are parsed, chunked, embedded, and stored in a <strong>Qdrant</strong> vector database; originals live in S3-compatible object storage. Indexing runs in a background worker.</li>
+  <li><strong>Retrieval:</strong> dense (semantic) and keyword search fused with Reciprocal Rank Fusion, then a <strong>cross-encoder re-ranker</strong> with a confidence threshold for <strong>abstention</strong>, the anti-hallucination safeguard.</li>
+  <li><strong>Answering:</strong> the model streams a grounded, cited response; a <strong>programmatic validator</strong> (no extra AI cost) checks citations. Models are pluggable: a local model through Ollama, OpenAI or any OpenAI-compatible service such as Groq, or a vLLM server.</li>
+  <li><strong>Privacy &amp; multi-tenancy:</strong> each workspace is isolated, with its own vector collection and storage prefix, and every search is filtered by user.</li>
+  <li><strong>Operations:</strong> separate models for chat and summarization to balance speed and cost; rate limits and quotas for public deployments; automated tests, dependency and container scanning, static analysis and a web security scan on every change.</li>
+</ul>
+<p class="tagline">One platform, a few focused steps, and a simple promise: answers you can trust, sourced from documents you own.</p>
+
+</div>
+
+<div class="page page-break">
+
+<h1 style="font-size:16pt;">Part 2: Technical Deep Dive</h1>
+<p class="sub">For engineers and technical stakeholders.</p>
+
+<h2>1. System at a Glance</h2>
+<p>DocuSage is a multi-tenant, retrieval-augmented-generation (RAG) platform: users upload documents and get cited, document-grounded answers through a chat interface.</p>
+<ul>
+  <li><strong>Backend:</strong> FastAPI + SQLAlchemy (async), entry point <code>src/main.py:create_app()</code>.</li>
+  <li><strong>Frontend:</strong> React 18 + TypeScript + Vite, SSE-driven chat UI.</li>
+  <li><strong>Datastores:</strong> PostgreSQL (relational), Qdrant (vectors), Redis (Celery broker, revoked-token list, rate-limit counters), S3-compatible object storage for the original files (SeaweedFS in the compose files, or Amazon S3).</li>
+  <li><strong>Async work:</strong> a Celery worker runs the ingestion pipeline.</li>
+  <li><strong>Models:</strong> pluggable LLM providers (Ollama, OpenAI or any OpenAI-compatible API such as Groq, vLLM) and embedding providers (BGE in-process, OpenAI) selected at runtime through config factories.</li>
+</ul>
+<p><strong>Backend layering:</strong> thin route handlers (<code>src/api/v1/</code>) → business logic (<code>src/services/</code>) → retrieval (<code>src/retrieval/</code>) → ingestion (<code>src/ingestion/</code>) → provider and store abstractions (<code>src/providers/</code>, <code>src/vector_store/</code>) → cross-cutting concerns (<code>src/core/</code>: exceptions, JWT + bcrypt security, structured logging, rate limiting, audit).</p>
+
+<h2>2. Document Ingestion Pipeline</h2>
+<pre>Upload → object storage (raw file) + Document row (PENDING)
+       → Celery task: parse → chunk → embed → Qdrant upsert
+       → status transitions → COMPLETED</pre>
+<ul>
+  <li><strong>Parsers</strong> handle PDF, DOCX (and DOC), TXT, Markdown and HTML.</li>
+  <li><strong>Chunker</strong> creates overlapping passages and preserves heading context (<code>heading_path</code>) for precise citations.</li>
+  <li><strong>Embedding</strong> (default <code>BAAI/bge-small-en-v1.5</code>, 384 dimensions) vectorizes each chunk.</li>
+  <li><strong>Qdrant upsert</strong> stores vectors + payload (<code>document_id</code>, <code>user_id</code>, <code>page_number</code>, <code>text</code>, <code>heading_path</code>, offsets) and a <strong>full-text payload index</strong> for keyword search.</li>
+  <li>Progress and failures are persisted on the <code>Document</code> row and shown live; a periodic sweep fails documents stuck in processing.</li>
+</ul>
+
+<h2>3. Retrieval Pipeline (<code>src/retrieval/</code>)</h2>
+<ol>
+  <li><strong>Query understanding:</strong> standalone-question rewriting (gated by an anaphora regex and prior turns) and optional <strong>HyDE</strong> (a recall booster, off by default).</li>
+  <li><strong>Hybrid retrieval:</strong> concurrent <strong>dense</strong> and <strong>keyword</strong> searches fused with <strong>Reciprocal Rank Fusion (RRF)</strong>; all reads filtered by <code>user_id</code> and workspace.</li>
+  <li><strong>Reranking + abstention:</strong> a <strong>cross-encoder</strong> (default <code>cross-encoder/ms-marco-MiniLM-L-6-v2</code>, configurable) scores <code>(query, candidate)</code> pairs; scores are sigmoid-normalized to <code>[0,1]</code> so one <code>abstention_threshold</code> decides whether to answer at all.</li>
+</ol>
+<p>Flow: <code>hybrid retrieve (about top 50) → rerank → top-k → grounded prompt</code>.</p>
+
+<h2>4. Orchestration (as built)</h2>
+<p>The chat path implements the <strong>routing workflow</strong> from Anthropic's <em>Building Effective Agents</em>: classify, then dispatch to a specialized path. <code>ChatOrchestrator.prepare()</code> is the "prepare" half of a turn.</p>
+<ul>
+  <li><strong>QuestionAnalyzer (router):</strong> rules first, at no cost. Greetings get a fixed reply, summary requests go to the summarizer, everything else is <code>rag_query</code>. An optional small JSON-mode LLM classifier (<code>ROUTER_USE_LLM</code>, off by default) is <strong>fail-open</strong>: any error falls back to <code>rag_query</code>.</li>
+  <li><strong>off_topic:</strong> a short reply, pseudo-streamed, no retrieval.</li>
+  <li><strong>doc_summary:</strong> <code>DocSummaryService</code> map-reduce; oversized documents are split into parts, each <strong>streamed</strong> (so the read timeout only has to cover the time to the first token), then reduced into a streamed executive summary. <code>DOC_SUMMARY_ENABLED=false</code> sends summary requests down the RAG path with a warning.</li>
+  <li><strong>rag_query:</strong> <code>RAGService</code>, query understanding → hybrid retrieve → rerank → <code>prompt_builder</code> assembles the grounded prompt → token stream. If nothing is relevant enough, the turn is declined with a fixed reply.</li>
+</ul>
+<p>The orchestrator returns a <strong><code>StreamPlan</code></strong> (token iterator + sources, confidence, abstained flag, citation legitimacy). Transport is <strong>SSE</strong> (<code>/chat/{id}/stream</code>) through a producer/queue with an 8-second keepalive heartbeat. After the last token, <code>answer_validator</code> runs <strong>programmatically</strong> (no second LLM pass) to verify citations and the abstention contract; messages persist to PostgreSQL. Citations link to a PyMuPDF-rendered page image with the cited passage highlighted (optionally cropped): the UI's "Check source" preview.</p>
+
+<h2>5. Multi-Tenancy, Security, Configuration</h2>
+<ul>
+  <li><strong>Isolation:</strong> per-workspace Qdrant collection (<code>{prefix}_ws_{workspace_id}</code>), every query also filtered by <code>user_id</code>, workspace-prefixed storage paths; tested against a real Qdrant.</li>
+  <li><strong>Auth:</strong> JWT (PyJWT) + bcrypt; dependency guards; audit log.</li>
+  <li><strong>Abuse controls:</strong> per-IP and per-user rate limits, per-user quotas and an optional site-wide daily question budget, all off by default for self-hosted installs.</li>
+  <li><strong>Config:</strong> a single Pydantic <code>BaseSettings</code> source; models swappable per role (chat, router, summarization).</li>
+  <li><strong>Quality:</strong> an <code>eval</code> API and service track RAG quality and regressions. CI runs ruff, unit and integration tests against real services, the frontend, and the demo stack end to end; separate workflows run dependency audits, CodeQL, a secret scan, image scans and an OWASP ZAP scan on every pull request.</li>
+</ul>
+
+<h2>6. Reference Architecture: Orchestration with LangGraph</h2>
+<div class="note"><strong>Note:</strong> today the orchestration is a purpose-built async controller (<code>ChatOrchestrator</code> + producer/queue SSE loop) that already behaves like a small state machine. This section shows how we would express the same workflow in <strong>LangGraph</strong>, and why we'd choose it over plain LangChain as the agent logic grows.</div>
+
+<h3>The workflow as a graph</h3>
+<p>LangGraph models the app as a <code>StateGraph</code>: a typed shared state flows through <strong>nodes</strong> connected by edges, including <strong>conditional</strong> and <strong>cyclic</strong> ones.</p>
+<pre>              ┌─────────────┐
+   START ───▶ │  router     │  (QuestionAnalyzer)
+              └──────┬──────┘
+        off_topic │  doc_summary │  rag_query
+        ▼          ▼              ▼
+   ┌─────────┐ ┌───────────┐ ┌──────────────┐
+   │ decline │ │ summarize │ │ understand_q │
+   └────┬────┘ │ (map→     │ └──────┬───────┘
+        │      │  reduce)  │        ▼
+        │      └─────┬─────┘   ┌──────────┐
+        │            │         │ retrieve │ (hybrid + RRF)
+        │            │         └────┬─────┘
+        │            │              ▼
+        │            │         ┌──────────┐  below threshold
+        │            │         │ rerank   ├──────────────▶ decline
+        │            │         └────┬─────┘
+        │            │              ▼
+        │            │         ┌──────────┐
+        │            │         │ generate │
+        │            │         └────┬─────┘
+        └────────────┴──────────────┤
+                                     ▼
+                              ┌────────────┐  citations invalid →
+                              │  validate  ├──── (loop) ────▶ regenerate
+                              └─────┬──────┘
+                                    ▼
+                                   END</pre>
+<p><strong>Shared state</strong> (typed) carries: <code>query, chat_history, intent, enriched_queries, candidates, reranked, confidence, answer, sources, abstained</code>. The mapping to existing code is nearly one to one: <code>router</code>→QuestionAnalyzer; <code>understand_q/retrieve/rerank</code>→<code>src/retrieval/*</code>; <code>generate</code>→RAGService+prompt_builder; <code>summarize</code>→DocSummaryService (LangGraph's <code>Send</code> API expresses map fan-out and reduce join); <code>validate</code>→answer_validator, with a conditional edge that could loop back to <code>generate</code>. Today the validator corrects the answer in place and does not retry.</p>
+<p><strong>What LangGraph adds:</strong> first-class conditional routing and cycles; per-node event streaming (maps onto our SSE events); checkpointing and durable state (resumability, human-in-the-loop, time-travel debugging); and graph-level observability (LangSmith tracing).</p>
+
+<h3>Why LangGraph over LangChain (for orchestration)</h3>
+<p>They're complementary: LangGraph is built by the LangChain team and uses LangChain components <em>inside</em> nodes. The difference is <strong>control flow</strong>:</p>
+<table>
+  <thead><tr><th>Concern</th><th>LangChain (chains / LCEL)</th><th>LangGraph</th></tr></thead>
+  <tbody>
+    <tr><td>Control flow</td><td>Linear pipelines / DAGs (A→B→C)</td><td>Graph with <strong>branches, loops, conditionals</strong></td></tr>
+    <tr><td>Branch by intent</td><td>Possible but rigid (RouterChain)</td><td>Native <strong>conditional edges</strong></td></tr>
+    <tr><td>Cyclic flows (retry/refine)</td><td>Hard: chains terminate forward</td><td>First-class: designed for cycles</td></tr>
+    <tr><td>Shared evolving state</td><td>Implicit, hard to inspect</td><td><strong>Central typed state</strong></td></tr>
+    <tr><td>Pause / resume / human-in-loop</td><td>Not built in</td><td><strong>Checkpointers</strong> make it native</td></tr>
+    <tr><td>Streaming partial progress</td><td>Final-output oriented</td><td><strong>Per-node event streaming</strong></td></tr>
+    <tr><td>Map-reduce fan-out</td><td>Manual</td><td><strong>Send</strong> API</td></tr>
+  </tbody>
+</table>
+<p><strong>Bottom line for DocuSage:</strong> the flow is not a straight pipeline. It <strong>branches</strong> on intent, could <strong>loop</strong> (validate→regenerate; retrieve→re-query on low confidence), <strong>fans out and in</strong> for summarization, and streams progress mid-flight. These are exactly the patterns LangChain's chain abstraction strains to express and LangGraph models directly. LangChain stays the right choice for the <em>building blocks</em> (model and embedding adapters, retrievers, parsers); LangGraph is the right choice for the <em>orchestration</em> that wires them into a stateful, conditional graph, replacing bespoke plumbing with a standardized, observable, resumable graph that is easy to extend (add a node and edges for a "clarifying question" or "tool use" step).</p>
+
+<h2>7. Deployment &amp; Operations</h2>
+<ul>
+  <li><strong>Local development:</strong> Docker Compose for Postgres, Qdrant, Redis, SeaweedFS and Ollama; the API, Celery worker and Vite run on the host.</li>
+  <li><strong>Public demo:</strong> the whole stack on one small VM (linux/arm64) behind Caddy (automatic HTTPS, security headers), with Groq as the hosted LLM through the OpenAI-compatible provider.</li>
+  <li><strong>Migrations:</strong> Alembic (<code>alembic upgrade head</code>), run when the API container starts.</li>
+  <li><strong>CI:</strong> lint → unit and integration tests → frontend → image builds for amd64 and arm64 → demo stack end to end, plus the security workflows. Nothing is pushed to a registry.</li>
+  <li><strong>Tuning levers:</strong> model selection per role, retrieval top-k and abstention threshold, chunk size and overlap, summary budgets, rate limits and quotas, all through environment configuration.</li>
+</ul>
+
+<footer>DocuSage: private, cited, document-grounded AI.</footer>
+</div>
+
+</body>
+</html>
