@@ -192,7 +192,7 @@ class QueryUnderstanding:
         # Defensive cleanup: the model occasionally returns a quote-
         # wrapped or numbered version. Strip both.
         text = response.content.strip()
-        text = re.sub(r"^[\"'`\-\*]+|[\"'`]+$", "", text).strip()
+        text = text.lstrip("\"'`-*").rstrip("\"'`").strip()
         text = re.sub(r"^\d+[.\)]\s*", "", text).strip()
         if not text or len(text) < 3:
             return query
