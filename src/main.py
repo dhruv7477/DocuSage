@@ -260,17 +260,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         version="1.0.0",
     )
 
-    yield  # App runs here
+    try:
+        yield  # App runs here
+    finally:
+        await _shutdown(app)
 
+
+async def _shutdown(app: FastAPI) -> None:
+    """Stop the background model warm-up and close the database pool."""
     log.info("app_shutdown")
     # Cancel the background warmup if it's still running at shutdown.
+    # asyncio.wait returns when the task has finished and never raises its
+    # result, so the cancellation it was just sent stays inside the task.
     warmup_task = getattr(app.state, "warmup_task", None)
     if warmup_task is not None and not warmup_task.done():
         warmup_task.cancel()
-        try:
-            await warmup_task
-        except (asyncio.CancelledError, Exception):
-            pass
+        await asyncio.wait({warmup_task})
 
     # Close pooled database connections on the loop that opened them. A
     # pooled asyncpg connection cannot be reused from another event loop,
@@ -302,10 +307,15 @@ def create_app() -> FastAPI:
 
 
 def _register_middleware(app: FastAPI) -> None:
-    # Rate limiting — must be registered before CORSMiddleware
+    # The middleware added last runs first. CORSMiddleware is added last so
+    # it is the outermost layer: it answers preflight requests itself and
+    # adds its headers to every response the layers inside it produce,
+    # including the rate limiter's 429s.
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
     app.add_middleware(SlowAPIMiddleware)
+
+    app.add_middleware(AuditMiddleware)
 
     app.add_middleware(
         CORSMiddleware,
@@ -314,8 +324,6 @@ def _register_middleware(app: FastAPI) -> None:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    app.add_middleware(AuditMiddleware)
 
 
 def _register_exception_handlers(app: FastAPI) -> None:
