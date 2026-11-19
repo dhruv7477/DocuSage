@@ -33,8 +33,12 @@ RUN apt-get update && apt-get upgrade -y \
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy application code
-COPY . .
+# Copy only what the API and the worker run: the code, the Alembic config
+# (it points at src/db/migrations) and the demo's sample documents. Tests,
+# CI scripts and deploy files stay out of the image.
+COPY src ./src
+COPY alembic.ini ./
+COPY demo ./demo
 
 # Copy and set entrypoint
 COPY docker/scripts/entrypoint.sh /entrypoint.sh
