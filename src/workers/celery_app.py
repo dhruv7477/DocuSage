@@ -47,22 +47,17 @@ celery_app.conf.update(
     result_serializer="json",
     timezone="UTC",
     enable_utc=True,
-
     # Reliability
-    task_acks_late=True,              # Re-queue if worker crashes mid-task
+    task_acks_late=True,  # Re-queue if worker crashes mid-task
     task_reject_on_worker_lost=True,  # Re-queue if worker process dies
-    worker_prefetch_multiplier=1,     # One task at a time per worker (prevents OOM for large models)
-
+    worker_prefetch_multiplier=1,  # One task at a time per worker (prevents OOM for large models)
     # Timeouts
-    task_soft_time_limit=600,         # 10 min soft limit (sends SIGTERM)
-    task_time_limit=660,              # 11 min hard limit (sends SIGKILL)
-
+    task_soft_time_limit=600,  # 10 min soft limit (sends SIGTERM)
+    task_time_limit=660,  # 11 min hard limit (sends SIGKILL)
     # Result retention
-    result_expires=86400,             # Keep results 24 hours
-
+    result_expires=86400,  # Keep results 24 hours
     # Silence Celery 5→6 migration warning about broker retry behaviour
     broker_connection_retry_on_startup=True,
-
     # Routing
     task_routes={
         "src.workers.tasks.ingest_document_task": {"queue": "ingestion"},

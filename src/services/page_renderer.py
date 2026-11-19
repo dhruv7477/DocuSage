@@ -46,7 +46,7 @@ _CROP_PAD_Y = 12.0
 
 def render_pdf_page(
     pdf_bytes: bytes,
-    page_number: int,          # 1-based (matches chunk payload page_number)
+    page_number: int,  # 1-based (matches chunk payload page_number)
     highlight_text: str | None = None,
     scale: float = 2.0,
     crop: bool = False,
@@ -85,12 +85,15 @@ def render_pdf_page(
                 union = fitz.Rect(rects[0])
                 for rect in rects[1:]:
                     union |= rect
-                clip = fitz.Rect(
-                    union.x0 - _CROP_PAD_X,
-                    union.y0 - _CROP_PAD_Y,
-                    union.x1 + _CROP_PAD_X,
-                    union.y1 + _CROP_PAD_Y,
-                ) & page.rect
+                clip = (
+                    fitz.Rect(
+                        union.x0 - _CROP_PAD_X,
+                        union.y0 - _CROP_PAD_Y,
+                        union.x1 + _CROP_PAD_X,
+                        union.y1 + _CROP_PAD_Y,
+                    )
+                    & page.rect
+                )
 
         pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), annots=True, clip=clip)
         return RenderedPage(

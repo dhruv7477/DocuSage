@@ -26,6 +26,7 @@ USER_ID = "123e4567-e89b-12d3-a456-426614174000"
 
 # ── Password Tests ────────────────────────────────────────────────
 
+
 class TestPasswordHashing:
     def test_hash_is_not_plaintext(self):
         hashed = hash_password("MyPassword1")
@@ -47,6 +48,7 @@ class TestPasswordHashing:
 
 
 # ── Token Tests ───────────────────────────────────────────────────
+
 
 class TestAccessToken:
     def test_create_and_decode(self):

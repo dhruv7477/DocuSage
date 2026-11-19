@@ -62,7 +62,9 @@ class OllamaProvider(BaseLLMProvider):
 
         try:
             req_timeout = httpx.Timeout(timeout or self._timeout, connect=10.0)
-            resp = await self._client.post("/api/chat", json=payload, timeout=req_timeout)
+            resp = await self._client.post(
+                "/api/chat", json=payload, timeout=req_timeout
+            )
             resp.raise_for_status()
             data = resp.json()
         except httpx.HTTPStatusError as exc:
@@ -116,7 +118,9 @@ class OllamaProvider(BaseLLMProvider):
                 base_url=self._base_url,
                 timeout=httpx.Timeout(timeout or self._timeout, connect=10.0),
             ) as _stream_client:
-                async with _stream_client.stream("POST", "/api/chat", json=payload) as resp:
+                async with _stream_client.stream(
+                    "POST", "/api/chat", json=payload
+                ) as resp:
                     resp.raise_for_status()
                     async for line in resp.aiter_lines():
                         if not line:

@@ -64,6 +64,7 @@ _TOKENIZER_NAME = "cl100k_base"
 @dataclass
 class TextChunk:
     """A single chunk ready for embedding and vector storage."""
+
     text: str
     chunk_index: int
     page_number: int
@@ -149,8 +150,12 @@ class SemanticChunker:
             if block.block_type == "table":
                 if current:
                     chunks.append(self._flush(current, len(chunks)))
-                    current = self._build_overlap(chunks[-1]) if self._overlap_tokens else []
-                    current_token_count = sum(self._token_count(b.text) for b in current)
+                    current = (
+                        self._build_overlap(chunks[-1]) if self._overlap_tokens else []
+                    )
+                    current_token_count = sum(
+                        self._token_count(b.text) for b in current
+                    )
                 # If a table itself blows past the budget, we still emit
                 # it as one chunk — slicing tables corrupts them.
                 chunks.append(
@@ -185,7 +190,9 @@ class SemanticChunker:
             # Budget exceeded → flush, then carry overlap into next chunk
             if current_token_count + block_tokens > self._chunk_tokens and current:
                 chunks.append(self._flush(current, len(chunks)))
-                current = self._build_overlap(chunks[-1]) if self._overlap_tokens else []
+                current = (
+                    self._build_overlap(chunks[-1]) if self._overlap_tokens else []
+                )
                 current_token_count = sum(self._token_count(b.text) for b in current)
 
             current.append(block)
@@ -199,7 +206,9 @@ class SemanticChunker:
         # indices into the actual ID strings).
         for i, c in enumerate(chunks):
             c.prev_chunk_id = str(chunks[i - 1].chunk_index) if i > 0 else None
-            c.next_chunk_id = str(chunks[i + 1].chunk_index) if i < len(chunks) - 1 else None
+            c.next_chunk_id = (
+                str(chunks[i + 1].chunk_index) if i < len(chunks) - 1 else None
+            )
 
         log.debug(
             "document_chunked",
@@ -318,6 +327,7 @@ class SemanticChunker:
 # The legacy name `RecursiveChunker` is preserved so existing imports
 # and tests keep working during the Phase 2 transition. New code should
 # use `SemanticChunker` directly.
+
 
 class RecursiveChunker(SemanticChunker):
     """Legacy alias. Char-based defaults are converted to token defaults."""

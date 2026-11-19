@@ -29,6 +29,7 @@ def _auth_as(test_app, mock_user):
     no effect. `dependency_overrides` is the supported mechanism.
     """
     from src.dependencies import get_current_user
+
     test_app.dependency_overrides[get_current_user] = lambda: mock_user
     try:
         yield
@@ -40,6 +41,7 @@ def _auth_as(test_app, mock_user):
 def _rag_as(test_app, mock_rag):
     """Override the _get_rag_service dependency (same patch caveat as above)."""
     from src.api.v1.chat import _get_rag_service
+
     test_app.dependency_overrides[_get_rag_service] = lambda: mock_rag
     try:
         yield
@@ -49,6 +51,7 @@ def _rag_as(test_app, mock_rag):
 
 def _make_mock_user(uid: uuid.UUID):
     from src.models.user import User, UserRole
+
     user = User()
     user.id = uid
     user.email = "alice@example.com"
@@ -99,13 +102,14 @@ def headers(user_id):
 
 
 class TestCreateChat:
-
     def test_create_chat_requires_auth(self, test_app):
         with TestClient(test_app, raise_server_exceptions=False) as c:
             resp = c.post("/api/v1/chat", json={"workspace_id": str(uuid.uuid4())})
         assert resp.status_code in (401, 403)
 
-    def test_create_chat_missing_workspace_id_returns_422(self, test_app, user_id, headers):
+    def test_create_chat_missing_workspace_id_returns_422(
+        self, test_app, user_id, headers
+    ):
         mock_user = _make_mock_user(user_id)
         with TestClient(test_app, raise_server_exceptions=False) as c:
             with _auth_as(test_app, mock_user):
@@ -126,6 +130,7 @@ class TestCreateChat:
         mock_chat.title = "New Chat"
         mock_chat.message_count = 0
         from datetime import datetime, timezone
+
         now = datetime.now(timezone.utc)
         mock_chat.created_at = now
         mock_chat.updated_at = now
@@ -149,7 +154,6 @@ class TestCreateChat:
 
 
 class TestListChats:
-
     def test_list_chats_requires_auth(self, test_app, workspace_id):
         with TestClient(test_app, raise_server_exceptions=False) as c:
             resp = c.get(f"/api/v1/chat?workspace_id={workspace_id}")
@@ -173,7 +177,6 @@ class TestListChats:
 
 
 class TestDeleteChat:
-
     def test_delete_chat_requires_auth(self, test_app, chat_id):
         with TestClient(test_app, raise_server_exceptions=False) as c:
             resp = c.delete(f"/api/v1/chat/{chat_id}")
@@ -181,6 +184,7 @@ class TestDeleteChat:
 
     def test_delete_chat_not_found(self, test_app, user_id, chat_id, headers):
         from src.core.exceptions import ChatNotFoundError
+
         mock_user = _make_mock_user(user_id)
 
         with TestClient(test_app, raise_server_exceptions=False) as c:
@@ -198,7 +202,6 @@ class TestDeleteChat:
 
 
 class TestQueryEndpoint:
-
     def test_query_requires_auth(self, test_app, chat_id):
         with TestClient(test_app, raise_server_exceptions=False) as c:
             resp = c.post(
@@ -231,8 +234,11 @@ class TestQueryEndpoint:
                 )
         assert resp.status_code == 422
 
-    def test_query_chat_not_found_returns_404(self, test_app, user_id, chat_id, headers):
+    def test_query_chat_not_found_returns_404(
+        self, test_app, user_id, chat_id, headers
+    ):
         from src.core.exceptions import ChatNotFoundError
+
         mock_user = _make_mock_user(user_id)
 
         with TestClient(test_app, raise_server_exceptions=False) as c:
@@ -252,6 +258,7 @@ class TestQueryEndpoint:
         self, test_app, user_id, workspace_id, chat_id, headers
     ):
         from src.services.rag_service import CitedSource
+
         mock_user = _make_mock_user(user_id)
 
         mock_chat = MagicMock()
@@ -264,6 +271,7 @@ class TestQueryEndpoint:
         mock_assistant_msg.id = uuid.uuid4()
 
         from src.services.rag_service import RAGResponse
+
         mock_rag_response = RAGResponse(
             answer="The refund policy is 30 days.",
             sources=[
@@ -310,7 +318,6 @@ class TestQueryEndpoint:
 
 
 class TestSSEStreamEndpoint:
-
     def test_stream_requires_auth(self, test_app, chat_id):
         with TestClient(test_app, raise_server_exceptions=False) as c:
             resp = c.get(f"/api/v1/chat/{chat_id}/stream?query=hello")
@@ -359,7 +366,9 @@ class TestSSEStreamEndpoint:
         orch.prepare = fake_prepare
         return orch
 
-    def _run_stream(self, test_app, user_id, workspace_id, chat_id, headers, tokens, query="hello"):
+    def _run_stream(
+        self, test_app, user_id, workspace_id, chat_id, headers, tokens, query="hello"
+    ):
         """Shared harness: override the FastAPI deps, mock services, GET the stream."""
         from src.api.v1.chat import _get_orchestrator
         from src.db.session import get_db
@@ -397,7 +406,9 @@ class TestSSEStreamEndpoint:
                     MockCS.generate_title = MagicMock(return_value="Test Chat")
                     MockCS.return_value = mock_svc
 
-                    with patch("src.services.document_service.DocumentService") as MockDS:
+                    with patch(
+                        "src.services.document_service.DocumentService"
+                    ) as MockDS:
                         mock_ds = AsyncMock()
                         mock_ds.list_documents.return_value = []
                         MockDS.return_value = mock_ds
@@ -409,20 +420,33 @@ class TestSSEStreamEndpoint:
         finally:
             test_app.dependency_overrides.clear()
 
-    def test_stream_returns_sse_content_type(self, test_app, user_id, workspace_id, chat_id, headers):
+    def test_stream_returns_sse_content_type(
+        self, test_app, user_id, workspace_id, chat_id, headers
+    ):
         """SSE endpoint must return text/event-stream content type."""
         resp = self._run_stream(
-            test_app, user_id, workspace_id, chat_id, headers,
+            test_app,
+            user_id,
+            workspace_id,
+            chat_id,
+            headers,
             tokens=["Hello ", "world."],
         )
         assert resp.status_code == 200
         assert "text/event-stream" in resp.headers.get("content-type", "")
 
-    def test_stream_events_are_valid_json(self, test_app, user_id, workspace_id, chat_id, headers):
+    def test_stream_events_are_valid_json(
+        self, test_app, user_id, workspace_id, chat_id, headers
+    ):
         """Each SSE data line must parse as valid JSON with a 'type' field."""
         resp = self._run_stream(
-            test_app, user_id, workspace_id, chat_id, headers,
-            tokens=["Hello world."], query="test",
+            test_app,
+            user_id,
+            workspace_id,
+            chat_id,
+            headers,
+            tokens=["Hello world."],
+            query="test",
         )
 
         # Parse SSE events
@@ -498,7 +522,9 @@ class TestSSEStreamEndpoint:
                     mock_svc.save_user_message.return_value = MagicMock()
                     MockCS.return_value = mock_svc
 
-                    with patch("src.services.document_service.DocumentService") as MockDS:
+                    with patch(
+                        "src.services.document_service.DocumentService"
+                    ) as MockDS:
                         mock_ds = AsyncMock()
                         mock_ds.list_documents.return_value = []
                         MockDS.return_value = mock_ds

@@ -29,7 +29,9 @@ def _make_user() -> User:
     return user
 
 
-def _make_search_result(text: str, score: float = 0.85, doc_id: str = "doc-1") -> SearchResult:
+def _make_search_result(
+    text: str, score: float = 0.85, doc_id: str = "doc-1"
+) -> SearchResult:
     return SearchResult(
         chunk_id=str(uuid.uuid4()),
         score=score,
@@ -114,7 +116,6 @@ def rag_service(mock_embedder, mock_vector_store, mock_llm, mock_query_understan
 
 
 class TestRAGServiceGenerate:
-
     @pytest.mark.asyncio
     async def test_generate_returns_answer(self, rag_service):
         user = _make_user()
@@ -129,7 +130,9 @@ class TestRAGServiceGenerate:
         mock_embedder.embed_query.assert_called_once_with("Test query")
 
     @pytest.mark.asyncio
-    async def test_generate_search_includes_user_id(self, rag_service, mock_vector_store):
+    async def test_generate_search_includes_user_id(
+        self, rag_service, mock_vector_store
+    ):
         user = _make_user()
         ws_id = uuid.uuid4()
         await rag_service.generate("Query", ws_id, user)
@@ -137,7 +140,9 @@ class TestRAGServiceGenerate:
         assert call_kwargs["search_filter"].user_id == str(user.id)
 
     @pytest.mark.asyncio
-    async def test_generate_search_includes_workspace_id(self, rag_service, mock_vector_store):
+    async def test_generate_search_includes_workspace_id(
+        self, rag_service, mock_vector_store
+    ):
         user = _make_user()
         ws_id = uuid.uuid4()
         await rag_service.generate("Query", ws_id, user)
@@ -161,7 +166,9 @@ class TestRAGServiceGenerate:
         assert response.abstained is True
 
     @pytest.mark.asyncio
-    async def test_document_id_filter_passed_to_search(self, rag_service, mock_vector_store):
+    async def test_document_id_filter_passed_to_search(
+        self, rag_service, mock_vector_store
+    ):
         user = _make_user()
         doc_ids = ["doc-abc", "doc-def"]
         await rag_service.generate("Query", uuid.uuid4(), user, document_ids=doc_ids)
@@ -170,7 +177,6 @@ class TestRAGServiceGenerate:
 
 
 class TestRAGServiceStream:
-
     @pytest.mark.asyncio
     async def test_stream_yields_tokens(self, rag_service, mock_llm):
         async def _fake_stream(messages, config):
@@ -186,7 +192,6 @@ class TestRAGServiceStream:
 
 
 class TestPrepareStream:
-
     @pytest.mark.asyncio
     async def test_on_stage_callback_sequence(self, rag_service, mock_llm):
         async def _fake_stream(messages, config):
@@ -195,7 +200,10 @@ class TestPrepareStream:
         mock_llm.stream = _fake_stream
         stages: list[str] = []
         outcome, token_iter = await rag_service.prepare_stream(
-            "Query", uuid.uuid4(), _make_user(), on_stage=stages.append,
+            "Query",
+            uuid.uuid4(),
+            _make_user(),
+            on_stage=stages.append,
         )
         [t async for t in token_iter]
         assert stages == ["retrieving", "reranking"]
@@ -207,18 +215,21 @@ class TestPrepareStream:
 
         mock_llm.stream = _fake_stream
         outcome, _ = await rag_service.prepare_stream(
-            "Query", uuid.uuid4(), _make_user(),
+            "Query",
+            uuid.uuid4(),
+            _make_user(),
         )
         assert outcome.prompt is not None
         assert outcome.prompt.included_results  # the mocked chunk made it in
 
 
 class TestExtractSources:
-
     def test_deduplicates_by_document_and_page(self):
         results = [
             _make_search_result("Chunk A", score=0.9, doc_id="doc-1"),
-            _make_search_result("Chunk B", score=0.7, doc_id="doc-1"),  # Same doc, same page
+            _make_search_result(
+                "Chunk B", score=0.7, doc_id="doc-1"
+            ),  # Same doc, same page
         ]
         sources = _extract_sources(results)
         assert len(sources) == 1

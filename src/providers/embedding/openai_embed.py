@@ -26,7 +26,6 @@ _MODEL_DIMENSIONS = {
 
 
 class OpenAIEmbeddingProvider(BaseEmbeddingProvider):
-
     def __init__(self, api_key: str, model: str = "text-embedding-3-large") -> None:
         if not api_key:
             raise ValueError("OPENAI_API_KEY required for OpenAI embedding provider.")
@@ -58,9 +57,13 @@ class OpenAIEmbeddingProvider(BaseEmbeddingProvider):
                     model=self._model, input=batch
                 )
             except APIConnectionError as exc:
-                raise EmbeddingError("Cannot reach OpenAI Embeddings.", detail=str(exc)) from exc
+                raise EmbeddingError(
+                    "Cannot reach OpenAI Embeddings.", detail=str(exc)
+                ) from exc
             except APIStatusError as exc:
-                raise EmbeddingError(f"OpenAI Embeddings error {exc.status_code}", detail=exc.message) from exc
+                raise EmbeddingError(
+                    f"OpenAI Embeddings error {exc.status_code}", detail=exc.message
+                ) from exc
 
             # Sort by index to preserve order (OpenAI doesn't guarantee order)
             items = sorted(resp.data, key=lambda x: x.index)

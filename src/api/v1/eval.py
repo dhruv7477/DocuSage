@@ -29,8 +29,10 @@ router = APIRouter(prefix="/eval", tags=["Evaluation"])
 
 # ── Request / Response Schemas ────────────────────────────────────
 
+
 class EvalRunRequest(BaseModel):
     """Evaluate a single Q&A pair."""
+
     question: str = Field(min_length=1, max_length=2000)
     answer: str = Field(min_length=1, max_length=8000)
     contexts: list[str] = Field(min_length=1, max_length=20)
@@ -40,6 +42,7 @@ class EvalRunRequest(BaseModel):
 
 class EvalSuiteRequest(BaseModel):
     """Evaluate a batch of Q&A pairs."""
+
     workspace_id: uuid.UUID
     test_cases: list[EvalRunRequest] = Field(min_length=1, max_length=50)
 
@@ -66,6 +69,7 @@ class EvalSuiteResponse(BaseModel):
 
 # ── Helpers ───────────────────────────────────────────────────────
 
+
 def _result_to_response(r: EvalResult) -> EvalResultResponse:
     return EvalResultResponse(
         question=r.question,
@@ -87,6 +91,7 @@ def _get_eval_service() -> EvalService:
 
 
 # ── Endpoints ─────────────────────────────────────────────────────
+
 
 @router.post(
     "/run",
@@ -131,6 +136,7 @@ async def run_eval_suite(
     Returns individual results plus mean scores per metric.
     """
     import asyncio
+
     results = await asyncio.gather(
         *[
             eval_service.evaluate(
@@ -146,7 +152,6 @@ async def run_eval_suite(
 
     eval_results = [r for r in results if not isinstance(r, Exception)]
 
-    from src.services.eval_service import EvalSuiteResult, _mean
     suite = EvalSuiteResult(results=eval_results)
     return EvalSuiteResponse(
         **suite.summary(),

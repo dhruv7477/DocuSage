@@ -36,11 +36,13 @@ class VLLMProvider(BaseLLMProvider):
     Uses the official openai SDK — same client code works for real OpenAI too.
     """
 
-    def __init__(self, base_url: str, api_key: str, model: str, timeout: int = 120) -> None:
+    def __init__(
+        self, base_url: str, api_key: str, model: str, timeout: int = 120
+    ) -> None:
         self._model = model
         self._client = AsyncOpenAI(
             base_url=base_url,
-            api_key=api_key,        # vLLM accepts any non-empty string
+            api_key=api_key,  # vLLM accepts any non-empty string
             timeout=timeout,
             max_retries=2,
         )
@@ -80,7 +82,11 @@ class VLLMProvider(BaseLLMProvider):
         choice = resp.choices[0]
         usage = resp.usage
 
-        log.debug("vllm_generate", model=self._model, tokens=usage.total_tokens if usage else 0)
+        log.debug(
+            "vllm_generate",
+            model=self._model,
+            tokens=usage.total_tokens if usage else 0,
+        )
         return LLMResponse(
             content=choice.message.content or "",
             model=self._model,
@@ -112,7 +118,9 @@ class VLLMProvider(BaseLLMProvider):
                     if delta:
                         yield delta
         except APIConnectionError as exc:
-            raise LLMProviderError("Cannot reach vLLM during stream.", detail=str(exc)) from exc
+            raise LLMProviderError(
+                "Cannot reach vLLM during stream.", detail=str(exc)
+            ) from exc
         except APIStatusError as exc:
             raise LLMProviderError(f"vLLM stream error {exc.status_code}") from exc
 

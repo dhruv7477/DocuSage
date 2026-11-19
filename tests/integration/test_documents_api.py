@@ -4,10 +4,9 @@ tests/integration/test_documents_api.py
 Integration tests for /api/v1/documents/* endpoints.
 """
 
-import io
 import uuid
 from contextlib import contextmanager
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,6 +16,7 @@ from src.main import create_app
 
 def _make_mock_user(uid: uuid.UUID):
     from src.models.user import User, UserRole
+
     user = User()
     user.id = uid
     user.email = "alice@example.com"
@@ -52,6 +52,7 @@ def _auth_as(test_app, mock_user):
     no effect. `dependency_overrides` is the supported mechanism.
     """
     from src.dependencies import get_current_user
+
     test_app.dependency_overrides[get_current_user] = lambda: mock_user
     try:
         yield
@@ -80,13 +81,16 @@ def headers(user_id):
 
 
 class TestDocumentUpload:
-
     def test_upload_requires_auth(self, test_app):
         with TestClient(test_app, raise_server_exceptions=False) as c:
-            resp = c.post("/api/v1/documents/upload", data={"workspace_id": str(uuid.uuid4())})
+            resp = c.post(
+                "/api/v1/documents/upload", data={"workspace_id": str(uuid.uuid4())}
+            )
         assert resp.status_code in (401, 403)
 
-    def test_upload_missing_file_returns_422(self, test_app, user_id, workspace_id, headers):
+    def test_upload_missing_file_returns_422(
+        self, test_app, user_id, workspace_id, headers
+    ):
         mock_user = _make_mock_user(user_id)
         with TestClient(test_app, raise_server_exceptions=False) as c:
             with _auth_as(test_app, mock_user):
@@ -101,6 +105,7 @@ class TestDocumentUpload:
         self, test_app, user_id, workspace_id, headers
     ):
         from src.core.exceptions import UnsupportedFileTypeError
+
         mock_user = _make_mock_user(user_id)
 
         with TestClient(test_app, raise_server_exceptions=False) as c:
@@ -114,7 +119,13 @@ class TestDocumentUpload:
                     resp = c.post(
                         "/api/v1/documents/upload",
                         data={"workspace_id": str(workspace_id)},
-                        files={"file": ("test.exe", b"MZ\x90\x00", "application/octet-stream")},
+                        files={
+                            "file": (
+                                "test.exe",
+                                b"MZ\x90\x00",
+                                "application/octet-stream",
+                            )
+                        },
                         headers=headers,
                     )
         assert resp.status_code == 422
@@ -124,6 +135,7 @@ class TestDocumentUpload:
         self, test_app, user_id, workspace_id, headers
     ):
         from datetime import datetime, timezone
+
         mock_user = _make_mock_user(user_id)
 
         # SimpleNamespace, not MagicMock: pydantic's from_attributes reads
@@ -131,6 +143,7 @@ class TestDocumentUpload:
         # (e.g. `progress`) that fail validation with a 500.
         from types import SimpleNamespace
         from src.models.document import DocumentStatus, DocumentType
+
         now = datetime.now(timezone.utc)
         mock_doc = SimpleNamespace(
             id=uuid.uuid4(),
@@ -162,7 +175,13 @@ class TestDocumentUpload:
                         resp = c.post(
                             "/api/v1/documents/upload",
                             data={"workspace_id": str(workspace_id)},
-                            files={"file": ("notes.txt", b"Hello world " * 10, "text/plain")},
+                            files={
+                                "file": (
+                                    "notes.txt",
+                                    b"Hello world " * 10,
+                                    "text/plain",
+                                )
+                            },
                             headers=headers,
                         )
 
@@ -173,7 +192,6 @@ class TestDocumentUpload:
 
 
 class TestListDocuments:
-
     def test_list_requires_auth(self, test_app, workspace_id):
         with TestClient(test_app, raise_server_exceptions=False) as c:
             resp = c.get(f"/api/v1/documents?workspace_id={workspace_id}")
@@ -199,9 +217,9 @@ class TestListDocuments:
 
 
 class TestGetDocument:
-
     def test_get_not_found_returns_404(self, test_app, user_id, headers):
         from src.core.exceptions import DocumentNotFoundError
+
         mock_user = _make_mock_user(user_id)
         doc_id = uuid.uuid4()
 
@@ -220,6 +238,7 @@ class TestGetDocument:
 
     def test_get_wrong_user_returns_403(self, test_app, user_id, headers):
         from src.core.exceptions import DocumentAccessDeniedError
+
         mock_user = _make_mock_user(user_id)
         doc_id = uuid.uuid4()
 

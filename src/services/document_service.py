@@ -37,22 +37,21 @@ from src.services.storage_service import StorageService
 log = get_logger(__name__)
 settings = get_settings()
 
-MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024   # 50 MB hard limit
+MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB hard limit
 
 _EXT_TO_TYPE: dict[str, DocumentType] = {
-    ".pdf":      DocumentType.PDF,
-    ".docx":     DocumentType.DOCX,
-    ".doc":      DocumentType.DOCX,
-    ".txt":      DocumentType.TXT,
-    ".md":       DocumentType.MARKDOWN,
+    ".pdf": DocumentType.PDF,
+    ".docx": DocumentType.DOCX,
+    ".doc": DocumentType.DOCX,
+    ".txt": DocumentType.TXT,
+    ".md": DocumentType.MARKDOWN,
     ".markdown": DocumentType.MARKDOWN,
-    ".html":     DocumentType.HTML,
-    ".htm":      DocumentType.HTML,
+    ".html": DocumentType.HTML,
+    ".htm": DocumentType.HTML,
 }
 
 
 class DocumentService:
-
     def __init__(self, db: AsyncSession, storage: StorageService) -> None:
         self._db = db
         self._storage = storage
@@ -189,7 +188,7 @@ class DocumentService:
             select(Document)
             .where(
                 Document.workspace_id == workspace_id,
-                Document.user_id == user.id,   # ★ User isolation
+                Document.user_id == user.id,  # ★ User isolation
             )
             .order_by(Document.created_at.desc())
         )
@@ -197,9 +196,7 @@ class DocumentService:
 
     # ── Get ───────────────────────────────────────────────────────
 
-    async def get_document(
-        self, document_id: uuid.UUID, user: User
-    ) -> Document:
+    async def get_document(self, document_id: uuid.UUID, user: User) -> Document:
         """
         Fetch a single document. Verifies ownership.
 
@@ -220,9 +217,7 @@ class DocumentService:
 
     # ── Delete ────────────────────────────────────────────────────
 
-    async def delete_document(
-        self, document_id: uuid.UUID, user: User
-    ) -> None:
+    async def delete_document(self, document_id: uuid.UUID, user: User) -> None:
         """
         Delete document record and storage file.
         Vector cleanup is handled by a Celery task triggered here.
@@ -250,13 +245,16 @@ class DocumentService:
         # (imported here to avoid circular imports)
         try:
             from src.workers.tasks import delete_document_vectors_task
+
             delete_document_vectors_task.delay(
                 workspace_id=str(document.workspace_id),
                 document_id=str(document_id),
                 user_id=str(user.id),
             )
         except Exception:
-            log.warning("vector_cleanup_task_dispatch_failed", document_id=str(document_id))
+            log.warning(
+                "vector_cleanup_task_dispatch_failed", document_id=str(document_id)
+            )
 
     # ── Private ───────────────────────────────────────────────────
 
@@ -270,6 +268,4 @@ class DocumentService:
             )
         )
         if not result.scalar_one_or_none():
-            raise WorkspaceAccessDeniedError(
-                "You are not a member of this workspace."
-            )
+            raise WorkspaceAccessDeniedError("You are not a member of this workspace.")

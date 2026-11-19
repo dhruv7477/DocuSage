@@ -29,11 +29,11 @@ settings = get_settings()
 # pool_pre_ping: validates connection is alive before handing to request
 engine = create_async_engine(
     settings.database_url,
-    echo=settings.app_debug,           # Log SQL only in debug mode
+    echo=settings.app_debug,  # Log SQL only in debug mode
     pool_size=10,
     max_overflow=20,
     pool_pre_ping=True,
-    pool_recycle=3600,                  # Recycle connections every 1hr
+    pool_recycle=3600,  # Recycle connections every 1hr
 )
 
 # ── Session Factory ───────────────────────────────────────────────
@@ -47,6 +47,7 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 # ── FastAPI Dependency ────────────────────────────────────────────
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """

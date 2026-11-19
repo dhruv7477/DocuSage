@@ -38,8 +38,9 @@ log = get_logger(__name__)
 
 
 class WorkspaceService:
-
-    def __init__(self, db: AsyncSession, vector_store: BaseVectorStore | None = None) -> None:
+    def __init__(
+        self, db: AsyncSession, vector_store: BaseVectorStore | None = None
+    ) -> None:
         self._db = db
         self._vector_store = vector_store
 
@@ -70,28 +71,20 @@ class WorkspaceService:
     ) -> WorkspaceMember:
         membership = await self._get_membership(workspace_id, user.id)
         if not membership:
-            raise WorkspaceAccessDeniedError(
-                "You are not a member of this workspace."
-            )
+            raise WorkspaceAccessDeniedError("You are not a member of this workspace.")
         return membership
 
-    async def _require_admin(
-        self, workspace: Workspace, user: User
-    ) -> None:
+    async def _require_admin(self, workspace: Workspace, user: User) -> None:
         """Require workspace ADMIN role or workspace ownership."""
         membership = await self._get_membership(workspace.id, user.id)
         is_admin = membership and membership.role == WorkspaceMemberRole.ADMIN
         is_owner = workspace.owner_id == user.id
         if not (is_admin or is_owner):
-            raise InsufficientPermissionsError(
-                "Workspace admin access required."
-            )
+            raise InsufficientPermissionsError("Workspace admin access required.")
 
     async def _member_count(self, workspace_id: uuid.UUID) -> int:
         result = await self._db.execute(
-            select(func.count()).where(
-                WorkspaceMember.workspace_id == workspace_id
-            )
+            select(func.count()).where(WorkspaceMember.workspace_id == workspace_id)
         )
         return result.scalar_one()
 
@@ -117,7 +110,9 @@ class WorkspaceService:
         self._db.add(member)
         await self._db.flush()
 
-        log.info("workspace_created", workspace_id=str(workspace.id), owner=str(user.id))
+        log.info(
+            "workspace_created", workspace_id=str(workspace.id), owner=str(user.id)
+        )
         return workspace
 
     async def list_user_workspaces(self, user: User) -> list[WorkspaceResponse]:
@@ -201,12 +196,12 @@ class WorkspaceService:
         log.info("workspace_updated", workspace_id=str(workspace_id))
         return workspace
 
-    async def delete_workspace(
-        self, workspace_id: uuid.UUID, user: User
-    ) -> None:
+    async def delete_workspace(self, workspace_id: uuid.UUID, user: User) -> None:
         workspace = await self._get_workspace(workspace_id)
         if workspace.owner_id != user.id:
-            raise InsufficientPermissionsError("Only the workspace owner can delete it.")
+            raise InsufficientPermissionsError(
+                "Only the workspace owner can delete it."
+            )
 
         await self._db.delete(workspace)
 
@@ -214,7 +209,11 @@ class WorkspaceService:
             try:
                 await self._vector_store.delete_collection(str(workspace_id))
             except Exception as exc:
-                log.warning("qdrant_collection_delete_failed", workspace_id=str(workspace_id), error=str(exc))
+                log.warning(
+                    "qdrant_collection_delete_failed",
+                    workspace_id=str(workspace_id),
+                    error=str(exc),
+                )
 
         log.info("workspace_deleted", workspace_id=str(workspace_id))
 
@@ -230,9 +229,7 @@ class WorkspaceService:
         workspace = await self._get_workspace(workspace_id)
         await self._require_admin(workspace, current_user)
 
-        target_result = await self._db.execute(
-            select(User).where(User.email == email)
-        )
+        target_result = await self._db.execute(select(User).where(User.email == email))
         target_user = target_result.scalar_one_or_none()
         if not target_user:
             raise UserNotFoundError(f"No user with email '{email}'.")
@@ -253,7 +250,9 @@ class WorkspaceService:
         )
         self._db.add(member)
         await self._db.flush()
-        log.info("member_added", workspace_id=str(workspace_id), user_id=str(target_user.id))
+        log.info(
+            "member_added", workspace_id=str(workspace_id), user_id=str(target_user.id)
+        )
         return member
 
     async def remove_member(

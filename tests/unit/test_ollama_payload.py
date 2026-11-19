@@ -24,7 +24,6 @@ MESSAGES = [LLMMessage(role="user", content="hi")]
 
 
 class TestBuildPayload:
-
     def test_json_format_added_when_requested(self):
         payload = _provider()._build_payload(
             MESSAGES, LLMConfig(response_format="json"), stream=False

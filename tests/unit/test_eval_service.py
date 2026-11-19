@@ -19,12 +19,14 @@ from src.services.eval_service import (
 
 def _mock_llm(content: str = "{}"):
     llm = AsyncMock()
-    llm.generate = AsyncMock(return_value=LLMResponse(
-        content=content,
-        model="mock",
-        prompt_tokens=50,
-        completion_tokens=30,
-    ))
+    llm.generate = AsyncMock(
+        return_value=LLMResponse(
+            content=content,
+            model="mock",
+            prompt_tokens=50,
+            completion_tokens=30,
+        )
+    )
     return llm
 
 
@@ -39,14 +41,20 @@ def _mock_embedder(vector: list[float] | None = None):
 class TestFaithfulness:
     @pytest.mark.asyncio
     async def test_all_supported_returns_1(self):
-        llm = _mock_llm('{"claims": [{"claim": "Refunds in 30 days", "verdict": "supported"}]}')
+        llm = _mock_llm(
+            '{"claims": [{"claim": "Refunds in 30 days", "verdict": "supported"}]}'
+        )
         service = EvalService(llm=llm)
-        score = await service._faithfulness("Q", "Refunds in 30 days", "Context about refunds")
+        score = await service._faithfulness(
+            "Q", "Refunds in 30 days", "Context about refunds"
+        )
         assert score == 1.0
 
     @pytest.mark.asyncio
     async def test_all_contradicted_returns_0(self):
-        llm = _mock_llm('{"claims": [{"claim": "Refunds in 90 days", "verdict": "contradicted"}]}')
+        llm = _mock_llm(
+            '{"claims": [{"claim": "Refunds in 90 days", "verdict": "contradicted"}]}'
+        )
         service = EvalService(llm=llm)
         score = await service._faithfulness("Q", "A", "Context")
         assert score == 0.0
@@ -57,7 +65,7 @@ class TestFaithfulness:
         llm = _mock_llm(payload)
         service = EvalService(llm=llm)
         score = await service._faithfulness("Q", "A", "C")
-        assert abs(score - 2/3) < 0.01
+        assert abs(score - 2 / 3) < 0.01
 
     @pytest.mark.asyncio
     async def test_empty_claims_returns_1(self):
@@ -102,7 +110,9 @@ class TestAnswerSimilarity:
         # Two identical vectors → cosine sim = 1.0
         embedder = AsyncMock()
         identical_vec = [1.0, 0.0, 0.0]
-        embedder.embed_documents = AsyncMock(return_value=[identical_vec, identical_vec])
+        embedder.embed_documents = AsyncMock(
+            return_value=[identical_vec, identical_vec]
+        )
         service = EvalService(llm=_mock_llm(), embedder=embedder)
         score = await service._answer_similarity("Same answer.", "Same answer.")
         assert abs(score - 1.0) < 0.01
@@ -110,9 +120,7 @@ class TestAnswerSimilarity:
     @pytest.mark.asyncio
     async def test_orthogonal_answers_return_low_score(self):
         embedder = AsyncMock()
-        embedder.embed_documents = AsyncMock(return_value=[
-            [1.0, 0.0], [0.0, 1.0]
-        ])
+        embedder.embed_documents = AsyncMock(return_value=[[1.0, 0.0], [0.0, 1.0]])
         service = EvalService(llm=_mock_llm(), embedder=embedder)
         score = await service._answer_similarity("Answer A", "Answer B")
         assert score < 0.1  # Orthogonal → near-zero similarity
@@ -122,6 +130,7 @@ class TestEvaluateComposite:
     @pytest.mark.asyncio
     async def test_composite_averages_available_metrics(self):
         from src.services.eval_service import EvalResult
+
         r = EvalResult(question="Q", answer="A")
         r.faithfulness = 0.8
         r.answer_relevance = 0.6
@@ -131,6 +140,7 @@ class TestEvaluateComposite:
     @pytest.mark.asyncio
     async def test_composite_ignores_none_metrics(self):
         from src.services.eval_service import EvalResult
+
         r = EvalResult(question="Q", answer="A")
         r.faithfulness = 0.9
         # Others are None — should not divide by 4
@@ -142,7 +152,7 @@ class TestParseJson:
         assert _parse_json('{"key": "value"}') == {"key": "value"}
 
     def test_json_with_markdown_fence(self):
-        result = _parse_json("```json\n{\"key\": 1}\n```")
+        result = _parse_json('```json\n{"key": 1}\n```')
         assert result == {"key": 1}
 
     def test_json_embedded_in_text(self):
@@ -188,6 +198,7 @@ class TestMean:
 class TestEvalSuiteResult:
     def test_mean_faithfulness(self):
         from src.services.eval_service import EvalResult
+
         r1 = EvalResult(question="Q", answer="A")
         r1.faithfulness = 0.8
         r2 = EvalResult(question="Q2", answer="A2")

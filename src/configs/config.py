@@ -10,7 +10,7 @@ from functools import lru_cache
 from typing import Literal
 from urllib.parse import quote_plus
 
-from pydantic import AnyHttpUrl, Field, PostgresDsn, computed_field, model_validator
+from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -257,7 +257,10 @@ class Settings(BaseSettings):
     def validate_production_settings(self) -> "Settings":
         """Enforce stricter rules in production to catch misconfigurations early."""
         if self.app_env == "production":
-            if self.secret_key == "your-super-secret-key-change-in-production-min-32-chars":
+            if (
+                self.secret_key
+                == "your-super-secret-key-change-in-production-min-32-chars"
+            ):
                 raise ValueError("SECRET_KEY must be changed in production!")
             if self.app_debug:
                 raise ValueError("APP_DEBUG must be False in production!")

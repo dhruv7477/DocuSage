@@ -27,14 +27,13 @@ def get_vector_store() -> BaseVectorStore:
 
     if store == "qdrant":
         from src.vector_store.qdrant_store import QdrantVectorStore
+
         return QdrantVectorStore(
             url=settings.qdrant_url,
             api_key=settings.qdrant_api_key,
         )
 
-    raise ValueError(
-        f"Unsupported VECTOR_STORE='{store}'. Valid options: qdrant"
-    )
+    raise ValueError(f"Unsupported VECTOR_STORE='{store}'. Valid options: qdrant")
 
 
 def reset_vector_store() -> None:

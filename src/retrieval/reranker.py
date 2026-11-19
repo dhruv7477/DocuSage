@@ -100,6 +100,7 @@ class CrossEncoderReranker(BaseReranker):
     def __init__(self, model_name: str | None = None) -> None:
         # Read default lazily so tests / CI can monkey-patch settings.
         from src.configs.config import get_settings
+
         self._model_name = model_name or get_settings().reranker_model
 
     @classmethod
@@ -110,10 +111,14 @@ class CrossEncoderReranker(BaseReranker):
         # bge-reranker-v2-m3). Runs in the reranker thread pool so the event
         # loop stays free, but may take 1-5 minutes on a cold cache. Log
         # upfront so the user can see it in the API console.
-        log.info("cross_encoder_loading_model", model=model_name,
-                 note="first-run download may take several minutes")
+        log.info(
+            "cross_encoder_loading_model",
+            model=model_name,
+            note="first-run download may take several minutes",
+        )
         try:
             from sentence_transformers.cross_encoder import CrossEncoder
+
             cls._model = CrossEncoder(model_name)
             cls._loaded_model_name = model_name
             log.info("cross_encoder_loaded", model=model_name)
@@ -175,11 +180,13 @@ class CrossEncoderReranker(BaseReranker):
 
         reranked: list[SearchResult] = []
         for result, sigmoid_score in scored[:top_k]:
-            reranked.append(SearchResult(
-                chunk_id=result.chunk_id,
-                score=round(sigmoid_score, 4),
-                payload=result.payload,
-            ))
+            reranked.append(
+                SearchResult(
+                    chunk_id=result.chunk_id,
+                    score=round(sigmoid_score, 4),
+                    payload=result.payload,
+                )
+            )
         return reranked
 
 
@@ -232,11 +239,13 @@ Relevance (1-10):"""
 
         reranked = []
         for result, score in scored[:top_k]:
-            reranked.append(SearchResult(
-                chunk_id=result.chunk_id,
-                score=round(score / max_score, 4),
-                payload=result.payload,
-            ))
+            reranked.append(
+                SearchResult(
+                    chunk_id=result.chunk_id,
+                    score=round(score / max_score, 4),
+                    payload=result.payload,
+                )
+            )
 
         log.debug(
             "llm_rerank_done",
@@ -247,9 +256,7 @@ Relevance (1-10):"""
         return reranked
 
     async def _score_one(self, query: str, passage: str) -> float:
-        prompt = self._SCORE_PROMPT.format(
-            query=query, passage=passage[:600]
-        )
+        prompt = self._SCORE_PROMPT.format(query=query, passage=passage[:600])
         response = await self._llm.generate(
             [LLMMessage(role="user", content=prompt)],
             self._config,
@@ -257,6 +264,7 @@ Relevance (1-10):"""
         raw = response.content.strip()
         # Parse first integer found
         import re
+
         match = re.search(r"\d+", raw)
         if match:
             return min(10.0, max(1.0, float(match.group())))

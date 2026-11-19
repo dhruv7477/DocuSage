@@ -41,8 +41,8 @@ _TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
     name="src.workers.tasks.ingest_document_task",
     bind=True,
     autoretry_for=_TRANSIENT_ERRORS,
-    retry_backoff=True,         # exponential: 1s, 2s, 4s, 8s …
-    retry_backoff_max=60,       # capped at 60s between retries
+    retry_backoff=True,  # exponential: 1s, 2s, 4s, 8s …
+    retry_backoff_max=60,  # capped at 60s between retries
     retry_jitter=True,
     max_retries=3,
 )
@@ -129,6 +129,7 @@ def delete_document_vectors_task(
 
 # ── Async Implementations ─────────────────────────────────────────
 
+
 async def _run_ingestion(document_id: str) -> IngestionResult:
     """
     Async implementation of the ingestion pipeline.
@@ -192,12 +193,12 @@ async def _run_ingestion(document_id: str) -> IngestionResult:
             raise
 
 
-async def _run_vector_delete(
-    workspace_id: str, document_id: str, user_id: str
-) -> None:
+async def _run_vector_delete(workspace_id: str, document_id: str, user_id: str) -> None:
     from src.db.session import engine
     from src.vector_store.factory import get_vector_store
 
-    engine.dispose(close=False)  # clear stale asyncpg pool connections (see _run_ingestion)
+    engine.dispose(
+        close=False
+    )  # clear stale asyncpg pool connections (see _run_ingestion)
     vs = get_vector_store()
     await vs.delete_document_vectors(workspace_id, document_id, user_id)

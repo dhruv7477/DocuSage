@@ -33,6 +33,7 @@ REFRESH_TOKEN_TYPE = "refresh"
 
 # ── Password ─────────────────────────────────────────────────────
 
+
 def hash_password(plain_password: str) -> str:
     """Return bcrypt hash of the given password."""
     return _pwd_context.hash(plain_password)
@@ -44,6 +45,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 # ── Token Creation ───────────────────────────────────────────────
+
 
 def create_access_token(
     subject: str | UUID,
@@ -101,6 +103,7 @@ def create_refresh_token(
 
 
 # ── Token Decoding ────────────────────────────────────────────────
+
 
 def decode_token(
     token: str,

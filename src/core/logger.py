@@ -14,9 +14,7 @@ import structlog
 from structlog.types import EventDict, Processor
 
 
-def _add_service_name(
-    logger: Any, method: str, event_dict: EventDict
-) -> EventDict:
+def _add_service_name(logger: Any, method: str, event_dict: EventDict) -> EventDict:
     """Inject app name into every log entry for log aggregation filtering."""
     event_dict["service"] = "privateai"
     return event_dict

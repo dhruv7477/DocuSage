@@ -82,6 +82,7 @@ Output rules
 @dataclass
 class BuiltPrompt:
     """The assembled prompt ready to send to the LLM."""
+
     messages: list[LLMMessage]
     context_chunks_used: int
     history_messages_used: int
@@ -189,10 +190,16 @@ class PromptBuilder:
                 continue
             seen_texts.add(text)
 
-            heading = " > ".join(result.payload.heading_path) if result.payload.heading_path else None
+            heading = (
+                " > ".join(result.payload.heading_path)
+                if result.payload.heading_path
+                else None
+            )
             header_bits = [
                 f"Source: {result.payload.source}",
-                f"p.{result.payload.page_number}" if result.payload.page_number else None,
+                f"p.{result.payload.page_number}"
+                if result.payload.page_number
+                else None,
                 heading,
             ]
             header = " — ".join(b for b in header_bits if b)
@@ -210,9 +217,7 @@ class PromptBuilder:
             return "(no documents matched the query)", []
         return "\n\n".join(parts), included
 
-    def _trim_history(
-        self, history: list[LLMMessage]
-    ) -> tuple[list[LLMMessage], int]:
+    def _trim_history(self, history: list[LLMMessage]) -> tuple[list[LLMMessage], int]:
         """
         Newest-first walk that keeps as many turns as fit in the
         history token budget. Older turns are dropped — the chat
@@ -238,14 +243,17 @@ class PromptBuilder:
 
 try:
     import tiktoken as _tiktoken
+
     _enc = _tiktoken.get_encoding("cl100k_base")
 
     def count_tokens(text: str) -> int:
         """Public tokenizer-based count (cl100k_base). Shared with DocSummaryService."""
         return max(1, len(_enc.encode(text)))
 except Exception:  # pragma: no cover — tiktoken is in requirements.txt
+
     def count_tokens(text: str) -> int:  # type: ignore[misc]
         return max(1, len(text) // 4)
+
 
 # Backward-compat alias — existing tests and internal callers use the
 # underscore name.

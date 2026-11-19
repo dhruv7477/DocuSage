@@ -85,8 +85,9 @@ Respond with ONLY this JSON object — no other text, no answer, no explanation:
 @dataclass
 class RouteDecision:
     """Outcome of the router call (always usable — fail-open)."""
+
     intent: Literal["off_topic", "doc_summary", "rag_query"]
-    reply: str | None = None              # populated only for off_topic
+    reply: str | None = None  # populated only for off_topic
     target_document_ids: list[str] = field(default_factory=list)  # [] = all
     raw: dict = field(default_factory=dict)
 
@@ -135,7 +136,9 @@ class QuestionAnalyzer:
         # ── Tier 1: instant heuristics ────────────────────────────
         heuristic = self._heuristic_route(query, documents)
         if heuristic is not None:
-            log.info("router_heuristic", intent=heuristic.intent, query_preview=query[:80])
+            log.info(
+                "router_heuristic", intent=heuristic.intent, query_preview=query[:80]
+            )
             return heuristic
 
         # ── Tier 2: optional LLM classification ───────────────────
@@ -168,7 +171,9 @@ class QuestionAnalyzer:
         intent = raw.get("intent") if isinstance(raw, dict) else None
         if intent not in _VALID_INTENTS:
             log.warning("router_unknown_intent", raw_intent=intent)
-            return RouteDecision(intent="rag_query", raw=raw if isinstance(raw, dict) else {})
+            return RouteDecision(
+                intent="rag_query", raw=raw if isinstance(raw, dict) else {}
+            )
 
         reply: str | None = None
         if intent == "off_topic":
@@ -230,7 +235,8 @@ class QuestionAnalyzer:
         parts: list[str] = []
         if documents:
             doc_lines = "\n".join(
-                f"  {i + 1}. {filename}" for i, (_, filename) in enumerate(documents[:15])
+                f"  {i + 1}. {filename}"
+                for i, (_, filename) in enumerate(documents[:15])
             )
             parts.append(f"Workspace documents:\n{doc_lines}")
         else:

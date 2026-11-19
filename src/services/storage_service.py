@@ -128,10 +128,14 @@ class StorageService:
                 import urllib3
                 from minio import Minio
             except ImportError as exc:
-                raise StorageError("minio not installed. Run: pip install minio") from exc
+                raise StorageError(
+                    "minio not installed. Run: pip install minio"
+                ) from exc
 
             http_client = urllib3.PoolManager(
-                timeout=urllib3.Timeout(connect=_CONNECT_TIMEOUT_S, read=_READ_TIMEOUT_S),
+                timeout=urllib3.Timeout(
+                    connect=_CONNECT_TIMEOUT_S, read=_READ_TIMEOUT_S
+                ),
                 retries=urllib3.Retry(total=0),  # tenacity owns retry policy
                 cert_reqs="CERT_REQUIRED" if settings.minio_secure else "CERT_NONE",
             )
@@ -164,7 +168,9 @@ class StorageService:
                 import boto3
                 from botocore.config import Config as BotoConfig
             except ImportError as exc:
-                raise StorageError("boto3 not installed. Run: pip install boto3") from exc
+                raise StorageError(
+                    "boto3 not installed. Run: pip install boto3"
+                ) from exc
 
             session = boto3.Session(
                 aws_access_key_id=settings.aws_access_key_id,
@@ -313,8 +319,11 @@ class StorageService:
     def _presigned_sync(self, path: str, expires: int) -> str:
         client, bucket = self._get_client()
         from datetime import timedelta
+
         if settings.storage_backend == "minio":
-            return client.presigned_get_object(bucket, path, expires=timedelta(seconds=expires))
+            return client.presigned_get_object(
+                bucket, path, expires=timedelta(seconds=expires)
+            )
         else:
             return client.generate_presigned_url(
                 "get_object",

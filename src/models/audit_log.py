@@ -18,7 +18,7 @@ Design decisions:
 
 from __future__ import annotations
 
-from sqlalchemy import DateTime, Index, Integer, String, Text, func
+from sqlalchemy import DateTime, Index, Integer, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -44,9 +44,7 @@ class AuditLog(Base):
     user_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # ── What ─────────────────────────────────────────────────────
-    action: Mapped[str] = mapped_column(
-        String(64), nullable=False, index=True
-    )
+    action: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     # e.g. "auth.register", "document.upload", "chat.query", "admin.disable_user"
 
     resource_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -59,7 +57,9 @@ class AuditLog(Base):
     method: Mapped[str] = mapped_column(String(10), nullable=False)
     path: Mapped[str] = mapped_column(String(512), nullable=False)
     status_code: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    request_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
 
     # ── Client context ───────────────────────────────────────────
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)

@@ -25,7 +25,8 @@ class WorkspaceMemberRole(str, Enum):
     Roles within a workspace (separate from global UserRole).
     A global MEMBER can be a workspace-level ADMIN for their own workspace.
     """
-    ADMIN = "admin"    # Can manage members, delete workspace, upload docs
+
+    ADMIN = "admin"  # Can manage members, delete workspace, upload docs
     MEMBER = "member"  # Can upload docs and query
 
     def __str__(self) -> str:  # see MessageRole — Python 3.11 fix
@@ -55,6 +56,7 @@ class Workspace(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     @property
     def vector_collection_name(self) -> str:
         from src.configs.config import get_settings
+
         prefix = get_settings().qdrant_collection_prefix
         return f"{prefix}_ws_{self.id}"
 
@@ -109,9 +111,7 @@ class WorkspaceMember(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     # ── Relationships ────────────────────────────────────────────
-    workspace: Mapped["Workspace"] = relationship(
-        "Workspace", back_populates="members"
-    )
+    workspace: Mapped["Workspace"] = relationship("Workspace", back_populates="members")
     user: Mapped["User"] = relationship(  # type: ignore[name-defined]  # noqa: F821
         "User", back_populates="workspace_memberships"
     )

@@ -13,7 +13,17 @@ import mimetypes
 import uuid
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.logger import get_logger
@@ -74,13 +84,18 @@ async def upload_document(
     # Dispatch Celery ingestion task
     try:
         from src.workers.tasks import ingest_document_task
+
         log.info("celery_dispatch_start", document_id=str(document.id))
         ingest_document_task.delay(str(document.id))
         log.info("celery_dispatch_ok", document_id=str(document.id))
     except Exception as exc:
-        log.error("celery_dispatch_failed", document_id=str(document.id), error=str(exc))
+        log.error(
+            "celery_dispatch_failed", document_id=str(document.id), error=str(exc)
+        )
         document.status = DocumentStatus.FAILED
-        document.error_message = "Failed to queue document for processing. Please try again."
+        document.error_message = (
+            "Failed to queue document for processing. Please try again."
+        )
         await service._db.flush()
 
     return DocumentResponse.model_validate(document)
@@ -138,8 +153,10 @@ async def get_document_file(
     document = await service.get_document(document_id, current_user)
     content = await service._storage.download(document.storage_path)
 
-    media_type = mimetypes.guess_type(document.original_filename)[0] \
+    media_type = (
+        mimetypes.guess_type(document.original_filename)[0]
         or "application/octet-stream"
+    )
     # RFC 5987 encoding so non-ASCII filenames survive the header.
     quoted = quote(document.original_filename)
     return Response(
@@ -160,9 +177,14 @@ async def get_document_file(
 async def get_document_page_image(
     document_id: uuid.UUID,
     page: int = Query(..., ge=1, description="1-based page number"),
-    chunk_id: str | None = Query(default=None, description="Chunk whose text to highlight"),
+    chunk_id: str | None = Query(
+        default=None, description="Chunk whose text to highlight"
+    ),
     scale: float = Query(default=2.0, ge=0.5, le=3.0),
-    crop: bool = Query(default=False, description="Clip to the highlighted passage instead of the full page"),
+    crop: bool = Query(
+        default=False,
+        description="Clip to the highlighted passage instead of the full page",
+    ),
     current_user: User = Depends(get_current_user),
     service: DocumentService = Depends(_get_service),
 ) -> Response:

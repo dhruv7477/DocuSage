@@ -40,6 +40,7 @@ log = get_logger(__name__)
 
 # ── Lifespan ──────────────────────────────────────────────────────
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
@@ -75,6 +76,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     log.info("STARTUP_STEP_1_embedder_warmup_start")
     try:
         from src.providers.embedding.factory import get_embedding_provider
+
         embedder = get_embedding_provider()
         log.info("embedding_warmup_start", provider=embedder.provider_name)
         warmup_ok = await embedder.health()
@@ -86,9 +88,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             elapsed_ms=int((_time.monotonic() - _t0) * 1000),
         )
     except Exception as exc:
-        log.warning("embedding_warmup_failed", error=str(exc), elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+        log.warning(
+            "embedding_warmup_failed",
+            error=str(exc),
+            elapsed_ms=int((_time.monotonic() - _t0) * 1000),
+        )
 
-    log.info("STARTUP_STEP_2_vector_store_prewarm_start", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+    log.info(
+        "STARTUP_STEP_2_vector_store_prewarm_start",
+        elapsed_ms=int((_time.monotonic() - _t0) * 1000),
+    )
     # Pre-warm provider singletons BEFORE the concurrent readiness probes.
     #
     # Root cause: `get_vector_store()` uses a lazy `from qdrant_client import
@@ -106,12 +115,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # touches the event loop.
     try:
         from src.vector_store.factory import get_vector_store
-        await asyncio.to_thread(get_vector_store)   # heavy gRPC import in thread
-        log.info("vector_store_prewarm_done", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
-    except Exception as exc:
-        log.warning("vector_store_prewarm_failed", error=str(exc), elapsed_ms=int((_time.monotonic() - _t0) * 1000))
 
-    log.info("STARTUP_STEP_3_reranker_prewarm_start", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+        await asyncio.to_thread(get_vector_store)  # heavy gRPC import in thread
+        log.info(
+            "vector_store_prewarm_done",
+            elapsed_ms=int((_time.monotonic() - _t0) * 1000),
+        )
+    except Exception as exc:
+        log.warning(
+            "vector_store_prewarm_failed",
+            error=str(exc),
+            elapsed_ms=int((_time.monotonic() - _t0) * 1000),
+        )
+
+    log.info(
+        "STARTUP_STEP_3_reranker_prewarm_start",
+        elapsed_ms=int((_time.monotonic() - _t0) * 1000),
+    )
     # Pre-warm the cross-encoder reranker BEFORE the first query arrives.
     # On a cold cache the model download (~568 MB for bge-reranker-v2-m3)
     # takes minutes; doing it here makes the wait visible in the startup
@@ -120,26 +140,47 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         _rs = get_settings()
         if _rs.reranker == "cross_encoder":
             from src.retrieval.reranker import CrossEncoderReranker
-            await asyncio.to_thread(CrossEncoderReranker._load_model, _rs.reranker_model)
-            log.info("reranker_prewarm_done",
-                     model=_rs.reranker_model,
-                     elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+
+            await asyncio.to_thread(
+                CrossEncoderReranker._load_model, _rs.reranker_model
+            )
+            log.info(
+                "reranker_prewarm_done",
+                model=_rs.reranker_model,
+                elapsed_ms=int((_time.monotonic() - _t0) * 1000),
+            )
         else:
             log.info("reranker_prewarm_skipped", strategy=_rs.reranker)
     except Exception as exc:
-        log.warning("reranker_prewarm_failed", error=str(exc), elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+        log.warning(
+            "reranker_prewarm_failed",
+            error=str(exc),
+            elapsed_ms=int((_time.monotonic() - _t0) * 1000),
+        )
 
-    log.info("STARTUP_STEP_4_llm_redis_init_start", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+    log.info(
+        "STARTUP_STEP_4_llm_redis_init_start",
+        elapsed_ms=int((_time.monotonic() - _t0) * 1000),
+    )
     _router_llm = None
     try:
         from src.providers.llm.factory import get_llm_provider, get_router_llm_provider
-        _llm = get_llm_provider()                   # fast — just stores config + httpx client
-        _router_llm = get_router_llm_provider()     # small intent-classifier model
+
+        _llm = get_llm_provider()  # fast — just stores config + httpx client
+        _router_llm = get_router_llm_provider()  # small intent-classifier model
         from src.core.token_blacklist import get_redis
-        get_redis()                                 # fast — just stores aioredis client
-        log.info("provider_singletons_initialized", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+
+        get_redis()  # fast — just stores aioredis client
+        log.info(
+            "provider_singletons_initialized",
+            elapsed_ms=int((_time.monotonic() - _t0) * 1000),
+        )
     except Exception as exc:
-        log.warning("provider_init_failed", error=str(exc), elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+        log.warning(
+            "provider_init_failed",
+            error=str(exc),
+            elapsed_ms=int((_time.monotonic() - _t0) * 1000),
+        )
         _llm = None
 
     # Pre-load the LLMs into RAM so the first query doesn't wait 30-90 s for
@@ -152,7 +193,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # entire API is unreachable until warmup returns. Scheduling it lets
     # startup finish and bind immediately; the first query just pays the
     # load cost if it arrives before warmup completes.
-    log.info("STARTUP_STEP_4b_llm_warmup_scheduled", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+    log.info(
+        "STARTUP_STEP_4b_llm_warmup_scheduled",
+        elapsed_ms=int((_time.monotonic() - _t0) * 1000),
+    )
 
     async def _warm_models() -> None:
         try:
@@ -175,7 +219,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Keep a reference on app.state so the task isn't garbage-collected.
     app.state.warmup_task = asyncio.create_task(_warm_models())
 
-    log.info("STARTUP_STEP_5_readiness_probes_start", elapsed_ms=int((_time.monotonic() - _t0) * 1000))
+    log.info(
+        "STARTUP_STEP_5_readiness_probes_start",
+        elapsed_ms=int((_time.monotonic() - _t0) * 1000),
+    )
 
     # Run readiness probes against every external dependency. With
     # STRICT_STARTUP=true (default) the app refuses to boot if anything
@@ -221,6 +268,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 # ── App Factory ───────────────────────────────────────────────────
+
 
 def create_app() -> FastAPI:
     app = FastAPI(
@@ -311,9 +359,7 @@ def _register_routers(app: FastAPI) -> None:
         report = await run_readiness_checks()
         return JSONResponse(
             status_code=(
-                status.HTTP_200_OK
-                if report.ok
-                else status.HTTP_503_SERVICE_UNAVAILABLE
+                status.HTTP_200_OK if report.ok else status.HTTP_503_SERVICE_UNAVAILABLE
             ),
             content=report.to_dict(),
         )

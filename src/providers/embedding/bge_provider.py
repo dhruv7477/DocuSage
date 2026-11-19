@@ -18,9 +18,7 @@ Install: pip install sentence-transformers torch
 """
 
 import asyncio
-from functools import lru_cache
 
-import numpy as np
 
 # Eagerly import sentence-transformers (and transitively torch) at module
 # import time. The first time `import sentence_transformers` runs in a
@@ -47,13 +45,13 @@ log = get_logger(__name__)
 # This map is only consulted before the first load (e.g. for the
 # `dimension` property on a freshly constructed provider).
 _KNOWN_MODEL_DIMENSIONS = {
-    "BAAI/bge-m3":              1024,
-    "BAAI/bge-large-en-v1.5":   1024,
-    "BAAI/bge-base-en-v1.5":     768,
-    "BAAI/bge-small-en-v1.5":    384,
-    "intfloat/e5-large-v2":     1024,
-    "intfloat/e5-base-v2":       768,
-    "intfloat/e5-small-v2":      384,
+    "BAAI/bge-m3": 1024,
+    "BAAI/bge-large-en-v1.5": 1024,
+    "BAAI/bge-base-en-v1.5": 768,
+    "BAAI/bge-small-en-v1.5": 384,
+    "intfloat/e5-large-v2": 1024,
+    "intfloat/e5-base-v2": 768,
+    "intfloat/e5-small-v2": 384,
 }
 
 
@@ -89,11 +87,7 @@ class BGEProvider(BaseEmbeddingProvider):
         # Pick the best estimate available pre-load: explicit user
         # config wins, otherwise the known-model map, otherwise a
         # neutral default that won't cause spurious dim-mismatch errors.
-        self._dim = (
-            expected_dimension
-            or _KNOWN_MODEL_DIMENSIONS.get(model_name)
-            or 384
-        )
+        self._dim = expected_dimension or _KNOWN_MODEL_DIMENSIONS.get(model_name) or 384
         self._model = None  # Lazy load — don't block import time
 
     def _load_model(self):
@@ -227,7 +221,7 @@ class BGEProvider(BaseEmbeddingProvider):
             model = self._load_model()
             vectors = model.encode(
                 texts,
-                normalize_embeddings=True,   # L2 normalise — cosine = dot product
+                normalize_embeddings=True,  # L2 normalise — cosine = dot product
                 batch_size=self._batch_size,
                 show_progress_bar=False,
             )
@@ -236,6 +230,4 @@ class BGEProvider(BaseEmbeddingProvider):
         try:
             return await loop.run_in_executor(None, _encode)
         except Exception as exc:
-            raise EmbeddingError(
-                "BGE embedding failed.", detail=str(exc)
-            ) from exc
+            raise EmbeddingError("BGE embedding failed.", detail=str(exc)) from exc

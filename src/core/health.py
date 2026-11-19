@@ -215,9 +215,9 @@ async def run_all_checks() -> HealthReport:
     services: list[ServiceHealth] = []
     for result in results:
         if isinstance(result, Exception):
-            services.append(ServiceHealth(
-                name="unknown", healthy=False, message=str(result)
-            ))
+            services.append(
+                ServiceHealth(name="unknown", healthy=False, message=str(result))
+            )
         else:
             services.append(result)
             if not result.healthy:

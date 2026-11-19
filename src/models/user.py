@@ -9,11 +9,9 @@ Role hierarchy:
     MEMBER      → regular user (can upload docs, query within workspace)
 """
 
-import uuid
 from enum import Enum
 
 from sqlalchemy import Boolean, String, Text
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin

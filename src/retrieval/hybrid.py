@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from src.core.logger import get_logger
 from src.providers.embedding.base import BaseEmbeddingProvider
@@ -50,6 +50,7 @@ log = get_logger(__name__)
 @dataclass
 class HybridRetrievalResult:
     """Fused candidate list plus per-stage diagnostics."""
+
     results: list[SearchResult]
     dense_count: int = 0
     sparse_count: int = 0
@@ -214,7 +215,9 @@ def _reciprocal_rank_fusion(
     canonical: dict[str, SearchResult] = {}
     for branch in ranked_lists:
         for rank, result in enumerate(branch):
-            scores[result.chunk_id] = scores.get(result.chunk_id, 0.0) + 1.0 / (k + rank + 1)
+            scores[result.chunk_id] = scores.get(result.chunk_id, 0.0) + 1.0 / (
+                k + rank + 1
+            )
             # Prefer the dense-branch SearchResult when both branches see
             # the same chunk (it carries the meaningful cosine score).
             existing = canonical.get(result.chunk_id)

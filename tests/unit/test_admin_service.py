@@ -6,14 +6,14 @@ Unit tests for AdminService — all DB calls mocked.
 
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from src.core.exceptions import InsufficientPermissionsError, UserNotFoundError
 from src.models.audit_log import AuditLog
 from src.models.user import User, UserRole
-from src.services.admin_service import AdminService, PlatformStats
+from src.services.admin_service import AdminService
 
 
 def _make_user(
@@ -135,17 +135,15 @@ class TestUpdateUser:
         sub_result.scalar_one_or_none.return_value = 0
 
         db.execute.side_effect = [
-            fetch_result,       # _fetch_user in update_user
-            MagicMock(),        # the UPDATE stmt
-            fetch_result,       # _fetch_user in get_user (re-fetch)
-            sub_result,         # ws count
-            sub_result,         # doc count
+            fetch_result,  # _fetch_user in update_user
+            MagicMock(),  # the UPDATE stmt
+            fetch_result,  # _fetch_user in get_user (re-fetch)
+            sub_result,  # ws count
+            sub_result,  # doc count
         ]
 
         service = AdminService(db)
-        view = await service.update_user(
-            user.id, is_active=False, acting_admin_id=admin_id
-        )
+        await service.update_user(user.id, is_active=False, acting_admin_id=admin_id)
 
         assert db.commit.called
 
@@ -187,13 +185,13 @@ class TestGetStats:
         group_result.all.return_value = []
 
         db.execute.side_effect = [
-            _scalar_result(10),   # total_users
-            _scalar_result(8),    # active_users
-            _scalar_result(5),    # total_workspaces
-            _scalar_result(20),   # total_documents
-            _scalar_result(15),   # total_chats
+            _scalar_result(10),  # total_users
+            _scalar_result(8),  # active_users
+            _scalar_result(5),  # total_workspaces
+            _scalar_result(20),  # total_documents
+            _scalar_result(15),  # total_chats
             _scalar_result(100),  # total_messages
-            group_result,         # documents_by_status
+            group_result,  # documents_by_status
         ]
 
         service = AdminService(db)

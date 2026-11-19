@@ -23,20 +23,21 @@ crashes at router-include time with NameError).
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
 from src.core.rate_limit import default_limit, limiter
-from src.dependencies import get_current_user, require_super_admin
+from src.dependencies import require_super_admin
 from src.db.session import get_db
 from src.models.user import User
-from src.services.admin_service import AdminService, AuditLogView, PlatformStats, UserAdminView
+from src.services.admin_service import AdminService, AuditLogView, UserAdminView
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
 
 # ── Response Schemas ──────────────────────────────────────────────
+
 
 class UserAdminResponse(BaseModel):
     id: str
@@ -102,11 +103,13 @@ class PaginatedAuditLogsResponse(BaseModel):
 
 # ── Dependency ────────────────────────────────────────────────────
 
+
 def _admin_service(db: AsyncSession = Depends(get_db)) -> AdminService:
     return AdminService(db)
 
 
 # ── User Endpoints ────────────────────────────────────────────────
+
 
 @router.get(
     "/users",
@@ -191,6 +194,7 @@ async def update_user(
 
 # ── Stats Endpoint ────────────────────────────────────────────────
 
+
 @router.get(
     "/stats",
     response_model=PlatformStatsResponse,
@@ -220,6 +224,7 @@ async def get_stats(
 
 # ── Audit Log Endpoints ───────────────────────────────────────────
 
+
 @router.get(
     "/audit-logs",
     response_model=PaginatedAuditLogsResponse,
@@ -231,7 +236,9 @@ async def list_audit_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(100, ge=1, le=500),
     user_id: str | None = Query(None, description="Filter by user UUID"),
-    action: str | None = Query(None, description="Filter by action e.g. 'document.upload'"),
+    action: str | None = Query(
+        None, description="Filter by action e.g. 'document.upload'"
+    ),
     status_code: int | None = Query(None, description="Filter by HTTP status code"),
     since: datetime | None = Query(None, description="ISO datetime lower bound"),
     until: datetime | None = Query(None, description="ISO datetime upper bound"),
@@ -277,6 +284,7 @@ async def get_audit_log(
 
 
 # ── Helpers ───────────────────────────────────────────────────────
+
 
 def _user_view_to_response(u: UserAdminView) -> UserAdminResponse:
     return UserAdminResponse(

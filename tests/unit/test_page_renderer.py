@@ -33,7 +33,6 @@ def _png_dimensions(png: bytes) -> tuple[int, int]:
 
 
 class TestRenderPdfPage:
-
     def test_returns_png_bytes(self):
         pdf = _make_pdf(["Hello world page one."])
         rendered = render_pdf_page(pdf, 1)

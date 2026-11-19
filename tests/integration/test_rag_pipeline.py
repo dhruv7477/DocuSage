@@ -9,13 +9,12 @@ Also verifies the critical user isolation guarantee:
 """
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from src.models.user import User, UserRole
 from src.providers.llm.base import LLMResponse
-from src.services.prompt_builder import PromptBuilder
 from src.services.rag_service import RAGService
 from src.vector_store.base import SearchResult, VectorPayload
 
@@ -89,9 +88,13 @@ class TestRAGIsolationGuarantee:
         ws_id = uuid.uuid4()
 
         # User A's docs
-        user_a_result = _make_result("User A's private document content.", str(user_a.id))
+        user_a_result = _make_result(
+            "User A's private document content.", str(user_a.id)
+        )
         # User B's docs
-        user_b_result = _make_result("User B's private document content.", str(user_b.id))
+        user_b_result = _make_result(
+            "User B's private document content.", str(user_b.id)
+        )
 
         embedder = AsyncMock()
         embedder.embed_query.return_value = [0.1] * 1024
@@ -223,7 +226,9 @@ class TestRAGFullPipeline:
         )
 
         rag = RAGService(embedder=embedder, vector_store=store, llm=llm)
-        await rag.generate("Follow-up question", uuid.uuid4(), user, history_messages=history)
+        await rag.generate(
+            "Follow-up question", uuid.uuid4(), user, history_messages=history
+        )
 
         messages = llm.generate.call_args[0][0]
         contents = [m.content for m in messages]

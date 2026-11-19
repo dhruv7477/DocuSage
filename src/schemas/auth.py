@@ -14,6 +14,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 
 # ── Request Schemas ───────────────────────────────────────────────
 
+
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
@@ -70,8 +71,10 @@ class ChangePasswordRequest(BaseModel):
 
 # ── Response Schemas ─────────────────────────────────────────────
 
+
 class UserResponse(BaseModel):
     """Safe user representation — never exposes password_hash."""
+
     id: uuid.UUID
     email: str
     full_name: str
@@ -85,10 +88,11 @@ class UserResponse(BaseModel):
 
 class TokenResponse(BaseModel):
     """Returned on successful login or token refresh."""
+
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
-    expires_in: int   # seconds until access token expires
+    expires_in: int  # seconds until access token expires
 
 
 class RegisterResponse(BaseModel):

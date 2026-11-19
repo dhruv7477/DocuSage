@@ -28,6 +28,7 @@ import pytest
 try:
     from dotenv import load_dotenv
     from pathlib import Path
+
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 except ImportError:  # pragma: no cover — python-dotenv ships with pydantic-settings
     pass
@@ -68,6 +69,7 @@ def chat_id() -> uuid.UUID:
 @pytest.fixture
 def mock_user(user_id):
     from src.models.user import User, UserRole
+
     user = User()
     user.id = user_id
     user.email = "alice@example.com"
@@ -104,6 +106,7 @@ def mock_embedder():
 @pytest.fixture
 def mock_llm():
     from src.providers.llm.base import LLMResponse
+
     llm = AsyncMock()
     llm.generate.return_value = LLMResponse(
         content="This is a mock answer from the LLM.",
@@ -125,6 +128,7 @@ def mock_llm():
 @pytest.fixture
 def mock_vector_store():
     from src.vector_store.base import SearchResult, VectorPayload
+
     store = AsyncMock()
     store.health.return_value = True
     store.collection_exists.return_value = True
@@ -159,6 +163,7 @@ def mock_storage():
 @pytest.fixture
 def rag_service(mock_embedder, mock_vector_store, mock_llm):
     from src.services.rag_service import RAGService
+
     return RAGService(
         embedder=mock_embedder,
         vector_store=mock_vector_store,
@@ -171,6 +176,7 @@ def rag_service(mock_embedder, mock_vector_store, mock_llm):
 @pytest.fixture
 def auth_headers(mock_user):
     from src.core.security import create_access_token
+
     token = create_access_token(subject=str(mock_user.id), token_type="access")
     return {"Authorization": f"Bearer {token}"}
 
@@ -193,6 +199,7 @@ def sample_html_bytes() -> bytes:
 
 # ── Phase 4: Advanced Retrieval Fixtures ─────────────────────────
 
+
 @pytest.fixture
 def mock_query_understanding():
     """
@@ -203,6 +210,7 @@ def mock_query_understanding():
     from src.retrieval.query_understanding import QueryEnrichment
 
     qu = AsyncMock()
+
     async def _enrich(query: str, history: list[tuple[str, str]] | None = None):
         return QueryEnrichment(
             original=query,
@@ -211,6 +219,7 @@ def mock_query_understanding():
             rewritten=False,
             used_hyde=False,
         )
+
     qu.enrich_query = AsyncMock(side_effect=_enrich)
     return qu
 
@@ -219,6 +228,7 @@ def mock_query_understanding():
 def mock_reranker():
     """Mock reranker that returns results in the same order (NoOp)."""
     from src.retrieval.reranker import NoOpReranker
+
     return NoOpReranker()
 
 
@@ -226,6 +236,7 @@ def mock_reranker():
 def hybrid_retriever(mock_embedder, mock_vector_store):
     """Real HybridRetriever wired around the mocked vector store."""
     from src.retrieval.hybrid import HybridRetriever
+
     return HybridRetriever(
         embedder=mock_embedder,
         vector_store=mock_vector_store,
@@ -244,6 +255,7 @@ def rag_service_advanced(
 ):
     """RAGService wired with the Phase 3 retrieval stack."""
     from src.services.rag_service import RAGService
+
     return RAGService(
         embedder=mock_embedder,
         vector_store=mock_vector_store,
@@ -260,4 +272,5 @@ def rag_service_advanced(
 def eval_service(mock_llm, mock_embedder):
     """EvalService with mocked LLM and embedder."""
     from src.services.eval_service import EvalService
+
     return EvalService(llm=mock_llm, embedder=mock_embedder)

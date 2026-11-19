@@ -20,9 +20,11 @@ from src.ingestion.parsers.text_parser import HTMLParser, TextParser
 # Instances are singletons — parsers are stateless, safe to share.
 _PARSERS: dict[str, BaseParser] = {}
 
+
 def _register(parser: BaseParser) -> None:
     for ext in parser.supported_extensions:
         _PARSERS[ext.lower()] = parser
+
 
 _register(PDFParser())
 _register(DOCXParser())
@@ -62,5 +64,6 @@ class ParserRegistry:
 
 def _get_extension(filename: str) -> str:
     import os
+
     _, ext = os.path.splitext(filename.lower())
     return ext

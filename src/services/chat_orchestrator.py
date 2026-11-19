@@ -43,7 +43,8 @@ _OFF_TOPIC_SLICE = 40
 @dataclass
 class StreamPlan:
     """Everything the SSE generator needs to run and finish a turn."""
-    intent: str                                   # rag_query | doc_summary | off_topic
+
+    intent: str  # rag_query | doc_summary | off_topic
     token_iter: AsyncIterator[str]
     sources: list[CitedSource] = field(default_factory=list)  # context-ordered
     confidence: float = 1.0
@@ -116,9 +117,7 @@ class ChatOrchestrator:
         # ── Document summary ──────────────────────────────────────
         if decision.intent == "doc_summary":
             emit({"type": "thinking", "stage": "summarizing"})
-            targets = _resolve_targets(
-                decision, document_ids, workspace_documents
-            )
+            targets = _resolve_targets(decision, document_ids, workspace_documents)
             outcome, token_iter = await self._summary.prepare_summary_stream(
                 workspace_id=workspace_id,
                 user=user,
@@ -126,15 +125,17 @@ class ChatOrchestrator:
                 query=query,
             )
             if outcome.truncated:
-                emit({
-                    "type": "warning",
-                    "code": "summary_truncated",
-                    "message": (
-                        "The document set is very large — the summary covers "
-                        "the first portion of it."
-                    ),
-                    "confidence": 1.0,
-                })
+                emit(
+                    {
+                        "type": "warning",
+                        "code": "summary_truncated",
+                        "message": (
+                            "The document set is very large — the summary covers "
+                            "the first portion of it."
+                        ),
+                        "confidence": 1.0,
+                    }
+                )
             return StreamPlan(
                 intent="doc_summary",
                 token_iter=token_iter,
@@ -161,6 +162,7 @@ class ChatOrchestrator:
         # intent classifier (which both answered off-topic questions and
         # wrongly refused real document questions). Tune via ABSTENTION_THRESHOLD.
         if self._rag._is_abstaining(outcome):
+
             async def _decline() -> AsyncIterator[str]:
                 for i in range(0, len(FALLBACK_OFF_TOPIC_REPLY), _OFF_TOPIC_SLICE):
                     yield FALLBACK_OFF_TOPIC_REPLY[i : i + _OFF_TOPIC_SLICE]
@@ -172,7 +174,9 @@ class ChatOrchestrator:
                 allow_citations=False,
             )
 
-        included = outcome.prompt.included_results if outcome.prompt else outcome.results
+        included = (
+            outcome.prompt.included_results if outcome.prompt else outcome.results
+        )
         return StreamPlan(
             intent="rag_query",
             token_iter=token_iter,

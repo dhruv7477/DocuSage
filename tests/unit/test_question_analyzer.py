@@ -38,9 +38,21 @@ class TestHeuristicTier:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "greeting",
-        ["Hi", "hi there!", "Hello", "hey", "Thanks!", "good morning",
-         # common typos the LLM tier shouldn't have to handle
-         "hlo", "helo", "heya", "hiya", "yo", "sup"],
+        [
+            "Hi",
+            "hi there!",
+            "Hello",
+            "hey",
+            "Thanks!",
+            "good morning",
+            # common typos the LLM tier shouldn't have to handle
+            "hlo",
+            "helo",
+            "heya",
+            "hiya",
+            "yo",
+            "sup",
+        ],
     )
     async def test_greetings_route_off_topic_without_llm(self, greeting):
         llm = AsyncMock()
@@ -61,7 +73,9 @@ class TestHeuristicTier:
     @pytest.mark.asyncio
     async def test_summary_request_routes_without_llm(self):
         llm = AsyncMock()
-        decision = await QuestionAnalyzer(llm).analyze("summarize everything", documents=DOCS)
+        decision = await QuestionAnalyzer(llm).analyze(
+            "summarize everything", documents=DOCS
+        )
         assert decision.intent == "doc_summary"
         assert decision.target_document_ids == []  # [] = all documents
         llm.generate.assert_not_called()
@@ -94,11 +108,13 @@ class TestLLMTier:
         # The router classifies only. Even if the model tries to ANSWER the
         # off-topic question in a 'reply' field, we discard it and use the
         # fixed refusal — so off-topic questions are never answered.
-        llm = _llm_returning({
-            "intent": "off_topic",
-            "reply": "A boy is typically a male child.",  # model trying to answer
-            "documents": [],
-        })
+        llm = _llm_returning(
+            {
+                "intent": "off_topic",
+                "reply": "A boy is typically a male child.",  # model trying to answer
+                "documents": [],
+            }
+        )
         decision = await QuestionAnalyzer(llm, use_llm=True).analyze(
             "what is a boy?", documents=DOCS
         )
@@ -112,11 +128,13 @@ class TestLLMTier:
         # greeting nor a summary, so heuristics must NOT short-circuit it —
         # it reaches the LLM classifier, which routes it off_topic with a
         # redirect instead of a blind rag_query that abstains.
-        llm = _llm_returning({
-            "intent": "off_topic",
-            "reply": "I can only help with the documents in this workspace.",
-            "documents": [],
-        })
+        llm = _llm_returning(
+            {
+                "intent": "off_topic",
+                "reply": "I can only help with the documents in this workspace.",
+                "documents": [],
+            }
+        )
         decision = await QuestionAnalyzer(llm, use_llm=True).analyze(
             "What is the capital of India?", documents=DOCS
         )
@@ -134,11 +152,13 @@ class TestLLMTier:
 
     @pytest.mark.asyncio
     async def test_doc_summary_resolves_filename_fragment(self):
-        llm = _llm_returning({
-            "intent": "doc_summary",
-            "reply": "",
-            "documents": ["quarterly report"],
-        })
+        llm = _llm_returning(
+            {
+                "intent": "doc_summary",
+                "reply": "",
+                "documents": ["quarterly report"],
+            }
+        )
         decision = await QuestionAnalyzer(llm, use_llm=True).analyze(
             "condense the quarterly numbers for me", documents=DOCS
         )
@@ -161,7 +181,10 @@ class TestLLMTier:
         llm = _llm_returning({"intent": "rag_query", "reply": "", "documents": []})
         await QuestionAnalyzer(llm, use_llm=True).analyze(
             "and that one?",
-            history=[("user", "condense i-9instr"), ("assistant", "Here is a condensed view...")],
+            history=[
+                ("user", "condense i-9instr"),
+                ("assistant", "Here is a condensed view..."),
+            ],
             documents=DOCS,
         )
         messages, _ = llm.generate.call_args.args
@@ -173,7 +196,6 @@ class TestLLMTier:
 
 
 class TestFailOpen:
-
     @pytest.mark.asyncio
     async def test_invalid_json_routes_to_rag(self):
         llm = _llm_returning("this is not json {{{")

@@ -59,6 +59,7 @@ log = get_logger(__name__)
 @dataclass
 class IngestionResult:
     """Summary of a completed ingestion run (terminal outcome)."""
+
     document_id: str
     chunks_created: int
     status: DocumentStatus
@@ -241,7 +242,12 @@ class IngestionPipeline:
             raise
         except _TerminalIngestionError as exc:
             return await self._mark_failed(db, document, str(exc))
-        except (VectorStoreError, EmbeddingError, LLMProviderError, StorageError) as exc:
+        except (
+            VectorStoreError,
+            EmbeddingError,
+            LLMProviderError,
+            StorageError,
+        ) as exc:
             # Domain exceptions from providers — treat as terminal so the
             # user sees a useful message. Connection-class subtypes were
             # already caught above by _TRANSIENT_ERRORS.
@@ -249,9 +255,7 @@ class IngestionPipeline:
         except Exception as exc:
             # Anything else — treat as terminal but keep the type in logs.
             log.exception("ingestion_unexpected_error", document_id=doc_id)
-            return await self._mark_failed(
-                db, document, f"{type(exc).__name__}: {exc}"
-            )
+            return await self._mark_failed(db, document, f"{type(exc).__name__}: {exc}")
 
     # ── Private ───────────────────────────────────────────────────
 

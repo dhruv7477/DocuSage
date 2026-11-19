@@ -50,7 +50,6 @@ import json
 import os
 import sys
 import time
-import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from statistics import mean
@@ -58,7 +57,16 @@ from statistics import mean
 import httpx
 
 
-SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".doc", ".txt", ".md", ".markdown", ".html", ".htm"}
+SUPPORTED_EXTENSIONS = {
+    ".pdf",
+    ".docx",
+    ".doc",
+    ".txt",
+    ".md",
+    ".markdown",
+    ".html",
+    ".htm",
+}
 
 
 @dataclass
@@ -290,29 +298,19 @@ def _score_case(
         if not recall:
             notes.append("expected an abstention but the model answered")
     else:
-        matches = [
-            s for s in sources
-            if s.get("source") == record.expected_doc
-        ]
+        matches = [s for s in sources if s.get("source") == record.expected_doc]
         recall = bool(matches)
         if not recall:
-            notes.append(
-                f"expected_doc '{record.expected_doc}' not in cited sources"
-            )
+            notes.append(f"expected_doc '{record.expected_doc}' not in cited sources")
         if record.expected_page is not None and matches:
             citation = any(s.get("page") == record.expected_page for s in matches)
             if not citation:
-                notes.append(
-                    f"expected_page {record.expected_page} not in cited pages"
-                )
+                notes.append(f"expected_page {record.expected_page} not in cited pages")
         else:
             citation = None
 
     if record.expected_keywords:
-        hit = sum(
-            1 for kw in record.expected_keywords
-            if kw.lower() in answer_lower
-        )
+        hit = sum(1 for kw in record.expected_keywords if kw.lower() in answer_lower)
         keyword_coverage = hit / len(record.expected_keywords)
     else:
         keyword_coverage = 1.0
@@ -340,12 +338,14 @@ def _load_qa(path: Path) -> list[QARecord]:
         if not raw or raw.startswith("#"):
             continue
         record = json.loads(raw)
-        out.append(QARecord(
-            question=record["question"],
-            expected_keywords=record.get("expected_keywords") or [],
-            expected_doc=record.get("expected_doc"),
-            expected_page=record.get("expected_page"),
-        ))
+        out.append(
+            QARecord(
+                question=record["question"],
+                expected_keywords=record.get("expected_keywords") or [],
+                expected_doc=record.get("expected_doc"),
+                expected_page=record.get("expected_page"),
+            )
+        )
     return out
 
 
@@ -353,7 +353,8 @@ def _collect_fixtures(folder: Path) -> list[Path]:
     if not folder.exists():
         return []
     return sorted(
-        p for p in folder.iterdir()
+        p
+        for p in folder.iterdir()
         if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS
     )
 
@@ -361,23 +362,27 @@ def _collect_fixtures(folder: Path) -> list[Path]:
 def _guess_mime(path: Path) -> str:
     suffix = path.suffix.lower()
     return {
-        ".pdf":  "application/pdf",
+        ".pdf": "application/pdf",
         ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ".doc":  "application/msword",
-        ".txt":  "text/plain",
-        ".md":   "text/markdown",
+        ".doc": "application/msword",
+        ".txt": "text/plain",
+        ".md": "text/markdown",
         ".markdown": "text/markdown",
         ".html": "text/html",
-        ".htm":  "text/html",
+        ".htm": "text/html",
     }.get(suffix, "application/octet-stream")
 
 
 def _print_case(record: QARecord, result: CaseResult) -> None:
-    flag = "✓" if (
-        (result.retrieval_recall_at_k is None or result.retrieval_recall_at_k)
-        and (result.citation_accuracy is None or result.citation_accuracy)
-        and result.keyword_coverage >= 0.5
-    ) else "✗"
+    flag = (
+        "✓"
+        if (
+            (result.retrieval_recall_at_k is None or result.retrieval_recall_at_k)
+            and (result.citation_accuracy is None or result.citation_accuracy)
+            and result.keyword_coverage >= 0.5
+        )
+        else "✗"
+    )
     print(
         f"  {flag} [{result.latency_seconds:.1f}s] "
         f"recall={result.retrieval_recall_at_k} "

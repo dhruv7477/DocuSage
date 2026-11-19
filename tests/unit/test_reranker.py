@@ -5,7 +5,7 @@ Unit tests for reranker implementations.
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from src.providers.llm.base import LLMResponse
 from src.retrieval.reranker import (
@@ -16,7 +16,9 @@ from src.retrieval.reranker import (
 from src.vector_store.base import SearchResult, VectorPayload
 
 
-def _make_result(chunk_id: str, score: float, text: str = "passage text") -> SearchResult:
+def _make_result(
+    chunk_id: str, score: float, text: str = "passage text"
+) -> SearchResult:
     return SearchResult(
         chunk_id=chunk_id,
         score=score,
@@ -58,12 +60,14 @@ class TestNoOpReranker:
 class TestLLMReranker:
     def _make_llm(self, score: int = 8):
         llm = AsyncMock()
-        llm.generate = AsyncMock(return_value=LLMResponse(
-            content=str(score),
-            model="mock",
-            prompt_tokens=30,
-            completion_tokens=2,
-        ))
+        llm.generate = AsyncMock(
+            return_value=LLMResponse(
+                content=str(score),
+                model="mock",
+                prompt_tokens=30,
+                completion_tokens=2,
+            )
+        )
         return llm
 
     @pytest.mark.asyncio
@@ -71,10 +75,16 @@ class TestLLMReranker:
         """Chunk with higher LLM score should rank first."""
         llm = AsyncMock()
         # First call returns 3 (low relevance), second returns 9 (high relevance)
-        llm.generate = AsyncMock(side_effect=[
-            LLMResponse(content="3", model="mock", prompt_tokens=10, completion_tokens=2),
-            LLMResponse(content="9", model="mock", prompt_tokens=10, completion_tokens=2),
-        ])
+        llm.generate = AsyncMock(
+            side_effect=[
+                LLMResponse(
+                    content="3", model="mock", prompt_tokens=10, completion_tokens=2
+                ),
+                LLMResponse(
+                    content="9", model="mock", prompt_tokens=10, completion_tokens=2
+                ),
+            ]
+        )
         reranker = LLMReranker(llm=llm)
         results = [
             _make_result("c1", 0.9, "Unrelated passage about weather."),
@@ -109,10 +119,14 @@ class TestLLMReranker:
     async def test_non_numeric_response_defaults_to_5(self):
         """If LLM returns non-numeric, default to score 5."""
         llm = AsyncMock()
-        llm.generate = AsyncMock(return_value=LLMResponse(
-            content="very relevant", model="mock",
-            prompt_tokens=10, completion_tokens=3,
-        ))
+        llm.generate = AsyncMock(
+            return_value=LLMResponse(
+                content="very relevant",
+                model="mock",
+                prompt_tokens=10,
+                completion_tokens=3,
+            )
+        )
         reranker = LLMReranker(llm=llm)
         results = [_make_result("c1", 0.9)]
         reranked = await reranker.rerank("q", results, top_k=1)
@@ -123,6 +137,7 @@ class TestLLMReranker:
 class TestGetReranker:
     def test_cross_encoder_strategy(self):
         from src.retrieval.reranker import CrossEncoderReranker
+
         r = get_reranker("cross_encoder")
         assert isinstance(r, CrossEncoderReranker)
 

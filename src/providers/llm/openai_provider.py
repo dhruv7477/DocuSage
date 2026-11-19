@@ -23,7 +23,6 @@ log = get_logger(__name__)
 
 
 class OpenAIProvider(BaseLLMProvider):
-
     def __init__(self, api_key: str, model: str, timeout: int = 60) -> None:
         if not api_key:
             raise ValueError("OPENAI_API_KEY is required for OpenAI provider.")
@@ -89,7 +88,9 @@ class OpenAIProvider(BaseLLMProvider):
                     if delta:
                         yield delta
         except APIConnectionError as exc:
-            raise LLMProviderError("Cannot reach OpenAI during stream.", detail=str(exc)) from exc
+            raise LLMProviderError(
+                "Cannot reach OpenAI during stream.", detail=str(exc)
+            ) from exc
 
     async def health(self) -> bool:
         try:

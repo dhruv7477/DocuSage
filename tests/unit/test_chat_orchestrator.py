@@ -37,8 +37,13 @@ def _result(text: str = "chunk text") -> SearchResult:
         chunk_id=str(uuid.uuid4()),
         score=0.9,
         payload=VectorPayload(
-            user_id="u", workspace_id="w", document_id="doc-1",
-            chunk_index=0, text=text, source="report.pdf", page_number=1,
+            user_id="u",
+            workspace_id="w",
+            document_id="doc-1",
+            chunk_index=0,
+            text=text,
+            source="report.pdf",
+            page_number=1,
         ),
     )
 
@@ -55,12 +60,18 @@ def _mock_rag(abstained: bool = False) -> MagicMock:
         results=included,
         confidence=0.9,
         enrichment=QueryEnrichment(
-            original="q", standalone="q", queries=["q"],
-            rewritten=False, used_hyde=False,
+            original="q",
+            standalone="q",
+            queries=["q"],
+            rewritten=False,
+            used_hyde=False,
         ),
         prompt=BuiltPrompt(
-            messages=[], context_chunks_used=1, history_messages_used=0,
-            estimated_tokens=10, included_results=included,
+            messages=[],
+            context_chunks_used=1,
+            history_messages_used=0,
+            estimated_tokens=10,
+            included_results=included,
         ),
     )
     rag.prepare_stream = AsyncMock(return_value=(outcome, _tokens()))
@@ -97,7 +108,6 @@ async def _prepare(orch, **kwargs):
 
 
 class TestRouting:
-
     @pytest.mark.asyncio
     async def test_router_disabled_goes_straight_to_rag(self):
         analyzer = AsyncMock()
@@ -116,8 +126,12 @@ class TestRouting:
     async def test_off_topic_short_circuits_rag(self):
         rag = _mock_rag()
         orch = ChatOrchestrator(
-            _analyzer(RouteDecision(intent="off_topic", reply="Hi! Ask about your docs.")),
-            rag, _mock_summary(), enable_router=True,
+            _analyzer(
+                RouteDecision(intent="off_topic", reply="Hi! Ask about your docs.")
+            ),
+            rag,
+            _mock_summary(),
+            enable_router=True,
         )
         plan, _ = await _prepare(orch, query="hello!")
 
@@ -131,8 +145,12 @@ class TestRouting:
     async def test_doc_summary_calls_summary_service_with_targets(self):
         summary = _mock_summary()
         orch = ChatOrchestrator(
-            _analyzer(RouteDecision(intent="doc_summary", target_document_ids=["doc-2"])),
-            _mock_rag(), summary, enable_router=True,
+            _analyzer(
+                RouteDecision(intent="doc_summary", target_document_ids=["doc-2"])
+            ),
+            _mock_rag(),
+            summary,
+            enable_router=True,
         )
         plan, _ = await _prepare(orch)
 
@@ -145,7 +163,9 @@ class TestRouting:
         summary = _mock_summary()
         orch = ChatOrchestrator(
             _analyzer(RouteDecision(intent="doc_summary")),
-            _mock_rag(), summary, enable_router=True,
+            _mock_rag(),
+            summary,
+            enable_router=True,
         )
         await _prepare(orch)
         call_kwargs = summary.prepare_summary_stream.call_args.kwargs
@@ -156,7 +176,9 @@ class TestRouting:
         rag = _mock_rag()
         orch = ChatOrchestrator(
             _analyzer(RouteDecision(intent="rag_query")),
-            rag, _mock_summary(), enable_router=True,
+            rag,
+            _mock_summary(),
+            enable_router=True,
         )
         plan, _ = await _prepare(orch)
 
@@ -175,7 +197,9 @@ class TestRouting:
         rag = _mock_rag(abstained=True)
         orch = ChatOrchestrator(
             _analyzer(RouteDecision(intent="rag_query")),
-            rag, _mock_summary(), enable_router=True,
+            rag,
+            _mock_summary(),
+            enable_router=True,
         )
         plan, events = await _prepare(orch, query="what is the capital of france?")
 
@@ -189,7 +213,6 @@ class TestRouting:
 
 
 class TestEmittedEvents:
-
     @pytest.mark.asyncio
     async def test_stage_sequence_for_rag_route(self):
         rag = _mock_rag()
@@ -206,7 +229,9 @@ class TestEmittedEvents:
 
         orch = ChatOrchestrator(
             _analyzer(RouteDecision(intent="rag_query")),
-            rag, _mock_summary(), enable_router=True,
+            rag,
+            _mock_summary(),
+            enable_router=True,
         )
         _, events = await _prepare(orch)
 
