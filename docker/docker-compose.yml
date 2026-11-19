@@ -1,6 +1,8 @@
 # ════════════════════════════════════════════════════════════════
 #  PrivateAI — Local Development Stack
-#  Starts: FastAPI, PostgreSQL, Qdrant, Redis, MinIO, Ollama
+#  Starts: FastAPI, PostgreSQL, Qdrant, Redis, SeaweedFS (S3), Ollama
+#  Published ports bind to 127.0.0.1 only. Do not use this file on a
+#  public server; use docker-compose.demo.yml there.
 # ════════════════════════════════════════════════════════════════
 
 networks:
@@ -11,7 +13,7 @@ volumes:
   postgres_data:
   qdrant_data:
   redis_data:
-  minio_data:
+  seaweedfs_data:
   ollama_data:
 
 services:
@@ -23,7 +25,7 @@ services:
       dockerfile: docker/Dockerfile
     container_name: privateai-api
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       - ../.env
     environment:
@@ -32,7 +34,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       QDRANT_URL: http://qdrant:6333
-      MINIO_ENDPOINT: minio:9000
+      MINIO_ENDPOINT: seaweedfs:8333
       OLLAMA_BASE_URL: http://ollama:11434
     depends_on:
       postgres:
@@ -41,9 +43,9 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
-      minio-bootstrap:
-        # Bucket must exist before document uploads can succeed.
-        condition: service_completed_successfully
+      seaweedfs:
+        # The app creates the bucket on first use.
+        condition: service_healthy
       ollama-bootstrap:
         # Model must be pulled before chat / ingestion can call the LLM.
         condition: service_completed_successfully
@@ -73,7 +75,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       QDRANT_URL: http://qdrant:6333
-      MINIO_ENDPOINT: minio:9000
+      MINIO_ENDPOINT: seaweedfs:8333
       OLLAMA_BASE_URL: http://ollama:11434
       SKIP_MIGRATIONS: "true"
     depends_on:
@@ -97,7 +99,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-docusage_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -114,8 +116,8 @@ services:
     image: qdrant/qdrant:v1.11.3
     container_name: privateai-qdrant
     ports:
-      - "6333:6333"   # REST API
-      - "6334:6334"   # gRPC
+      - "127.0.0.1:6333:6333"   # REST API
+      - "127.0.0.1:6334:6334"   # gRPC
     volumes:
       - qdrant_data:/qdrant/storage
     networks:
@@ -132,7 +134,7 @@ services:
     image: redis:7-alpine
     container_name: privateai-redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     networks:
@@ -145,34 +147,39 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── MinIO (S3-compatible object storage) ──────────────────────
-  minio:
-    image: minio/minio:latest
-    container_name: privateai-minio
+  # ── SeaweedFS (S3-compatible object storage) ──────────────────
+  # Replaces MinIO, which no longer publishes images. The app's "minio"
+  # storage backend is a generic S3 client, so only the endpoint changed.
+  # Host port 9000 keeps MINIO_ENDPOINT=localhost:9000 working for an
+  # app running on the host. Credentials come from MINIO_ACCESS_KEY and
+  # MINIO_SECRET_KEY in .env.
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.51
+    container_name: privateai-seaweedfs
     ports:
-      - "9000:9000"   # API
-      - "9001:9001"   # Console UI
+      - "127.0.0.1:9000:8333"   # S3 API
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      S3_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+    entrypoint: ["/bin/sh", "/start.sh"]
     volumes:
-      - minio_data:/data
+      - seaweedfs_data:/data
+      - ./seaweedfs/start.sh:/start.sh:ro
     networks:
       - privateai-net
     restart: unless-stopped
-    command: server /data --console-address ":9001"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   # ── Ollama (LLaMA + Embeddings) ───────────────────────────────
   ollama:
     image: ollama/ollama:latest
     container_name: privateai-ollama
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama_data:/root/.ollama
     networks:
@@ -234,33 +241,4 @@ services:
             echo "Model $$MODEL already present."
           fi
         done
-    restart: "no"
-
-  # ── MinIO bootstrap: creates the application bucket on first run ──
-  # Uses the official mc client image. Idempotent — re-runs are no-ops.
-  minio-bootstrap:
-    image: minio/mc:latest
-    container_name: privateai-minio-bootstrap
-    depends_on:
-      minio:
-        condition: service_healthy
-    networks:
-      - privateai-net
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
-      MINIO_BUCKET: ${MINIO_BUCKET:-privateai-docs}
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        set -e
-        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do
-          echo "Waiting for MinIO..."; sleep 1
-        done
-        if ! mc ls "local/$$MINIO_BUCKET" >/dev/null 2>&1; then
-          echo "Creating bucket $$MINIO_BUCKET..."
-          mc mb "local/$$MINIO_BUCKET"
-        else
-          echo "Bucket $$MINIO_BUCKET already exists."
-        fi
     restart: "no"

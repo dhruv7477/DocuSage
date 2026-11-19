@@ -1,0 +1,41 @@
+# Serves the built frontend and proxies the API, behind automatic HTTPS.
+# DEMO_DOMAIN is the site address. A public name gets a Let's Encrypt
+# certificate (DNS must point here, ports 80 and 443 open). "localhost" gets
+# a certificate from Caddy's own local CA.
+#
+# Access logs are off on purpose: the chat stream carries the question in the
+# URL, and the demo does not keep visitors' questions.
+
+{$DEMO_DOMAIN:demo.example.com} {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	# API, including the SSE chat stream. flush_interval -1 forwards each
+	# event as soon as the app writes it. Uploads are capped just above the
+	# app's own 50 MB limit, so the app still returns its JSON error.
+	handle /api/* {
+		request_body {
+			max_size 51MB
+		}
+		reverse_proxy api:8000 {
+			flush_interval -1
+		}
+	}
+
+	# Liveness only, for an external uptime check. /health/deep is not proxied.
+	handle /health {
+		reverse_proxy api:8000
+	}
+
+	# Single-page app: unknown paths fall back to index.html.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

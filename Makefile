@@ -38,8 +38,8 @@ help:
 	@echo "    make stack-reset      Stop + remove volumes (WIPES data)"
 	@echo ""
 	@echo "  Local-dev workflow (deps in Docker, app on host)"
-	@echo "    make dev-up           Start deps (postgres/redis/qdrant/minio/ollama),"
-	@echo "                          create the bucket, pull the LLM model"
+	@echo "    make dev-up           Start deps (postgres/redis/qdrant/seaweedfs/ollama),"
+	@echo "                          pull the LLM model"
 	@echo "    make dev-up-native    Like dev-up but Ollama runs NATIVELY (ARM64/Snapdragon)"
 	@echo "    make dev              Run API + Celery worker + frontend in ONE terminal"
 	@echo "    make dev-down         Stop dep containers"
@@ -58,18 +58,18 @@ help:
 
 
 # ── Full Docker stack ─────────────────────────────────────────────
-# Bootstrap containers (ollama-bootstrap, minio-bootstrap) are removed
+# The bootstrap container (ollama-bootstrap) is removed
 # before every `up` so compose re-runs them. Without this, compose's
 # `service_completed_successfully` policy skips the bootstrap on the
 # second `up` — which is the trap that left an outdated LLM_MODEL stuck
 # in the volume after `.env` changed. The bootstrap scripts themselves
-# are idempotent (no-op when the model / bucket already exists), so the
+# are idempotent (no-op when the model already exists), so the
 # cost of re-running on every boot is effectively zero.
 .PHONY: stack-up stack-down stack-logs stack-reset
 stack-up:
-	-$(COMPOSE) rm -fs minio-bootstrap ollama-bootstrap 2>/dev/null
+	-$(COMPOSE) rm -fs ollama-bootstrap 2>/dev/null
 	$(COMPOSE) up --build -d
-	@echo "Stack starting. Bootstrap services (model pull, bucket create)"
+	@echo "Stack starting. The model-pull bootstrap"
 	@echo "may take a few minutes on first run. Tail with: make stack-logs"
 
 stack-down:
@@ -91,10 +91,10 @@ dev-up:
 	@echo "where the dev data lives) — the container postgres would double-bind"
 	@echo "5432 and split reads/writes across two different databases."
 	-$(COMPOSE) stop api worker postgres 2>/dev/null
-	$(COMPOSE) up -d redis qdrant minio ollama
-	@echo "Re-running bootstraps so model / bucket pick up any .env changes..."
-	-$(COMPOSE) rm -fs minio-bootstrap ollama-bootstrap 2>/dev/null
-	$(COMPOSE) up minio-bootstrap ollama-bootstrap
+	$(COMPOSE) up -d redis qdrant seaweedfs ollama
+	@echo "Re-running the model bootstrap so it picks up any .env changes..."
+	-$(COMPOSE) rm -fs ollama-bootstrap 2>/dev/null
+	$(COMPOSE) up ollama-bootstrap
 	@echo ""
 	@echo "Deps are up. Now:"
 	@echo "  1)  make migrate     # one-shot, run Alembic migrations"
@@ -102,8 +102,8 @@ dev-up:
 	@echo "                       # all in this one terminal — Ctrl+C stops all"
 
 dev-down:
-	$(COMPOSE) stop redis qdrant minio ollama \
-	  minio-bootstrap ollama-bootstrap
+	$(COMPOSE) stop redis qdrant seaweedfs ollama \
+	  ollama-bootstrap
 
 
 # ── Native Ollama (Windows ARM64 / Snapdragon dev) ────────────────
@@ -117,9 +117,7 @@ dev-down:
 dev-up-native:
 	@echo "Native-Ollama dev: deps in Docker, Ollama native on :11434."
 	-$(COMPOSE) stop api worker postgres ollama ollama-bootstrap 2>/dev/null
-	$(COMPOSE) up -d redis qdrant minio
-	-$(COMPOSE) rm -fs minio-bootstrap 2>/dev/null
-	$(COMPOSE) up minio-bootstrap
+	$(COMPOSE) up -d redis qdrant seaweedfs
 	@$(MAKE) ollama-pull
 	@echo ""
 	@echo "Deps up + models pulled. Make sure native Ollama is running"
@@ -167,7 +165,7 @@ dev-status:
 	@echo "PostgreSQL (native):" && "C:\Program Files\PostgreSQL\18\bin\pg_isready.exe" -h localhost -U docusage_user -d docusage || true
 	@echo "Redis:    " && $(COMPOSE) exec -T redis redis-cli ping || true
 	@echo "Qdrant:   " && curl -sf http://localhost:6333/healthz && echo " ok" || true
-	@echo "MinIO:    " && curl -sf http://localhost:9000/minio/health/live && echo " ok" || true
+	@echo "S3:       " && curl -sf http://localhost:9000/healthz && echo " ok" || true
 	@echo "Ollama:   " && curl -sf http://localhost:11434/api/tags >/dev/null && echo "ok" || echo "down"
 
 

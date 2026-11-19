@@ -39,6 +39,12 @@ jobs:
       - name: Ruff format check
         run: ruff format --check src/ tests/
 
+      - name: Shell scripts
+        run: |
+          docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
+            docker/scripts/entrypoint.sh docker/seaweedfs/start.sh \
+            scripts/demo-env.sh deploy/oracle/setup-vm.sh deploy/oracle/backup-db.sh
+
       - name: No CRLF line endings committed
         run: |
           crlf=$(git ls-files --eol | awk '$1 ~ /crlf/ {print $NF}')
@@ -79,6 +85,11 @@ jobs:
       POSTGRES_USER: docusage_user
       POSTGRES_PASSWORD: testpassword
       REDIS_URL: redis://localhost:6379/0
+      STORAGE_BACKEND: minio
+      MINIO_ENDPOINT: localhost:8333
+      MINIO_ACCESS_KEY: ci-access-key
+      MINIO_SECRET_KEY: ci-secret-key-not-a-real-secret
+      MINIO_BUCKET: docusage-test
     services:
       postgres:
         image: postgres:16-alpine
@@ -110,6 +121,17 @@ jobs:
           pip install "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements.txt -c constraints.txt
 
+      # S3 storage for tests/integration/test_storage_s3.py. A step, not a
+      # service container, because it needs a custom entrypoint.
+      - name: Start SeaweedFS
+        run: |
+          docker run -d --name seaweedfs -p 8333:8333 \
+            -e S3_ACCESS_KEY="$MINIO_ACCESS_KEY" -e S3_SECRET_KEY="$MINIO_SECRET_KEY" \
+            -v "$PWD/docker/seaweedfs/start.sh:/start.sh:ro" \
+            --entrypoint /bin/sh chrislusf/seaweedfs:4.51 /start.sh
+          for i in $(seq 1 60); do curl -sf http://localhost:8333/healthz && exit 0; sleep 1; done
+          docker logs seaweedfs; exit 1
+
       - name: Apply migrations
         run: alembic upgrade head
 
@@ -138,11 +160,18 @@ jobs:
         run: npm run build
 
   # ── Docker Build ────────────────────────────────────────────────
-  # Built natively on arm64, the architecture of the demo VM.
+  # Native builds on both architectures. arm64 is the demo VM.
   docker-build:
-    name: Docker Build (arm64)
-    runs-on: ubuntu-24.04-arm
+    name: Docker Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     needs: [lint, test-unit, test-integration]
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+          - arch: amd64
+            runner: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -161,8 +190,8 @@ jobs:
           push: false
           load: true
           tags: ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
-          cache-from: type=gha,scope=arm64
-          cache-to: type=gha,mode=max,scope=arm64
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
 
       - name: Image has no secrets or local state
         run: |
@@ -171,6 +200,94 @@ jobs:
               if [ -e "$p" ]; then echo "unexpected $p in image"; exit 1; fi
             done
             echo "image is clean" '
+
+      - name: torch is the CPU-only build
+        run: |
+          docker run --rm --entrypoint python "${DOCKER_IMAGE}:${GITHUB_SHA}" \
+            -c "import torch, sys; print(torch.__version__); sys.exit(torch.version.cuda is not None)"
+
+  # ── Demo stack end to end ───────────────────────────────────────
+  # docker/docker-compose.demo.yml on arm64, behind Caddy on https://localhost,
+  # with a mock OpenAI-compatible LLM instead of Groq.
+  e2e-demo:
+    name: Demo stack end to end (arm64)
+    runs-on: ubuntu-24.04-arm
+    needs: [lint]
+    env:
+      COMPOSE: docker compose -f docker/docker-compose.demo.yml -f tests/e2e/compose.e2e.yml
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write docker/.env
+        run: |
+          DEMO_DOMAIN=localhost GROQ_API_KEY=ci-not-a-real-key scripts/demo-env.sh
+          sed -i 's|^LLM_BASE_URL=.*|LLM_BASE_URL=http://mock-llm:8080/v1|' docker/.env
+
+      - name: Start the demo stack
+        run: $COMPOSE up -d --build --wait --wait-timeout 900
+
+      - name: Only Caddy publishes ports
+        run: |
+          $COMPOSE ps --format json | python3 -c '
+          import json, sys
+          rows = [json.loads(line) for line in sys.stdin if line.strip()]
+          published = {r["Service"]: sorted({p["PublishedPort"] for p in (r.get("Publishers") or []) if p.get("PublishedPort")}) for r in rows}
+          print(published)
+          unexpected = {s: p for s, p in published.items() if p and s != "caddy"}
+          sys.exit(f"unexpected published ports: {unexpected}" if unexpected else 0)'
+
+      - name: Internal services require credentials
+        run: |
+          test "$($COMPOSE exec -T api curl -s -o /dev/null -w '%{http_code}' http://qdrant:6333/collections)" = 401
+          test "$($COMPOSE exec -T api curl -s -o /dev/null -w '%{http_code}' http://seaweedfs:8333/docusage-docs)" = 403
+          $COMPOSE exec -T redis redis-cli ping | grep -q NOAUTH
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Sign up, upload, ingest, stream a cited answer
+        run: |
+          pip install httpx==0.27.2
+          python -W ignore tests/e2e/demo_e2e.py https://localhost
+
+      - name: Database backup can be restored
+        run: |
+          BACKUP_DIR="$RUNNER_TEMP/backups" deploy/oracle/backup-db.sh
+          dump=$(ls "$RUNNER_TEMP"/backups/docusage-*.dump)
+          $COMPOSE exec -T postgres pg_restore --list < "$dump" | grep -q "TABLE DATA public users"
+
+      - name: Service logs
+        if: failure()
+        run: $COMPOSE logs --tail=200
+
+  # ── VM setup script ─────────────────────────────────────────────
+  # deploy/oracle/setup-vm.sh on a fresh arm64 Ubuntu runner, twice, to show
+  # it works and that a second run changes nothing.
+  vm-setup:
+    name: VM setup script (arm64)
+    runs-on: ubuntu-24.04-arm
+    needs: [lint]
+    steps:
+      - uses: actions/checkout@v4
+      # The runner already has /swapfile, so use a separate file to exercise
+      # the creation path.
+      - name: First run
+        run: |
+          sudo SWAP_SIZE=1G SWAP_FILE=/docusage-swapfile deploy/oracle/setup-vm.sh | tee first-run.log
+          grep -q "Created a 1G swap file at /docusage-swapfile" first-run.log
+      - name: Second run is a no-op
+        run: |
+          sudo SWAP_SIZE=1G SWAP_FILE=/docusage-swapfile deploy/oracle/setup-vm.sh | tee second-run.log
+          grep -q "/docusage-swapfile is already active" second-run.log
+          grep -q "INPUT already accepts tcp/443" second-run.log
+      - name: Result
+        run: |
+          swapon --show | grep -q /docusage-swapfile
+          grep -q "^/docusage-swapfile none swap" /etc/fstab
+          sudo iptables -C INPUT -p tcp -m state --state NEW -m tcp --dport 443 -j ACCEPT
+          test -f /etc/cron.d/docusage-backup
 
   # ── Docker Push (main branch only) ─────────────────────────────
   docker-push:
