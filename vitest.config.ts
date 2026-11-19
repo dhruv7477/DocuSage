@@ -2,9 +2,9 @@ import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
-// Separate from vite.config.ts on purpose: the app pins vite 4 while
-// vitest bundles its own vite 5 — sharing one config file invites
-// plugin-API mismatches. Keep this file minimal and aligned.
+// Separate from vite.config.ts on purpose: the test settings (jsdom, the
+// setup file) stay out of the app build, and the dev-server proxy stays out
+// of the tests. Keep the plugins and aliases aligned with vite.config.ts.
 export default defineConfig({
   plugins: [react()],
   resolve: {

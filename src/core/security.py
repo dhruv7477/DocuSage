@@ -15,7 +15,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from jose import JWTError, ExpiredSignatureError, jwt
+import jwt
+from jwt import ExpiredSignatureError, InvalidTokenError
 from passlib.context import CryptContext
 
 from src.core.exceptions import TokenExpiredError, TokenInvalidError
@@ -122,7 +123,7 @@ def decode_token(
         payload = jwt.decode(token, secret_key, algorithms=[algorithm])
     except ExpiredSignatureError:
         raise TokenExpiredError("Token has expired. Please log in again.")
-    except JWTError as exc:
+    except InvalidTokenError as exc:
         log.warning("jwt_decode_failed", error=str(exc))
         raise TokenInvalidError("Token is invalid or tampered.") from exc
 

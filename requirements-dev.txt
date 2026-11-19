@@ -2,9 +2,9 @@
 #   pip install -r requirements-dev.txt -c constraints.txt
 -r requirements.txt
 
-pytest==8.3.3
-pytest-asyncio==0.24.0
-pytest-cov==5.0.0
+pytest==9.2.0
+pytest-asyncio==1.4.1.post1
+pytest-cov==7.1.0
 mypy==1.13.0
 ruff==0.7.0  # keep in step with RUFF_VERSION in .github/workflows/ci.yml
 PyYAML==6.0.3  # tests read the workflow and compose files

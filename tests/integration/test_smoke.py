@@ -375,10 +375,11 @@ class TestSmokePipeline:
             )
         assert resp.status_code == 204
 
-    def test_15_unauth_returns_403(self, client, state):
-        """Unauthenticated requests to protected routes return 403."""
+    def test_15_unauth_returns_401(self, client, state):
+        """Unauthenticated requests to protected routes return 401 with a challenge."""
         resp = client.get("/api/v1/auth/me")
-        assert resp.status_code == 403
+        assert resp.status_code == 401
+        assert resp.headers["www-authenticate"].lower().startswith("bearer")
 
     def test_16_nonexistent_resource_returns_404(self, client, state):
         """Fetching a nonexistent document returns 404."""

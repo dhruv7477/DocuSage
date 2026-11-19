@@ -207,7 +207,7 @@ async def get_document_page_image(
     document = await service.get_document(document_id, current_user)
     if document.file_type != DocumentType.PDF:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Page images are only available for PDF documents.",
         )
 
@@ -236,7 +236,7 @@ async def get_document_page_image(
         )
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
 
     return Response(
