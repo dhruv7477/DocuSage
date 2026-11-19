@@ -124,8 +124,11 @@ src/                 Backend (Python) and frontend (TypeScript) share this folde
 docker/              Dockerfiles, compose files, Caddy and SeaweedFS config
 deploy/oracle/       VM setup, backups and deployment guide
 demo/samples/        Public-domain sample PDFs
+docs/                Case study and technical deep dive
 tests/               unit/, integration/, e2e/
 ```
+
+For more depth: [docs/TECHNICAL_DEEP_DIVE.md](docs/TECHNICAL_DEEP_DIVE.md) walks through ingestion, retrieval and orchestration, and [docs/CASE_STUDY.md](docs/CASE_STUDY.md) is the non-technical overview. [docs/DocuSage_Report.html](docs/DocuSage_Report.html) has both as one printable page.
 
 ## License
 
