@@ -5,9 +5,14 @@ Unit tests for rate limiting helpers and audit log utilities.
 No real HTTP server needed — tests the pure logic.
 """
 
+import asyncio
 from unittest.mock import MagicMock
 
+import pytest
+from starlette.requests import Request
+from starlette.responses import Response
 
+from src.core import audit
 from src.core.audit import _get_client_ip, _resolve_action
 from src.core.rate_limit import chat_limit, default_limit
 
@@ -98,6 +103,66 @@ class TestGetClientIp:
     def test_x_forwarded_for_strips_whitespace(self):
         req = self._make_request(forwarded_for="  203.0.113.1  , 10.0.0.1")
         assert _get_client_ip(req) == "203.0.113.1"
+
+
+# ── AuditMiddleware background write ──────────────────────────────
+
+
+def _http_request(method: str, path: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "headers": [],
+            "query_string": b"",
+        }
+    )
+
+
+@pytest.mark.unit
+class TestAuditMiddlewareWrite:
+    async def test_keeps_the_write_task_until_it_finishes(self, monkeypatch):
+        release = asyncio.Event()
+        written: list[str] = []
+
+        async def slow_write(**kwargs) -> None:
+            await release.wait()
+            written.append(kwargs["action"])
+
+        monkeypatch.setattr(audit, "_write_audit_log", slow_write)
+        middleware = audit.AuditMiddleware(app=MagicMock())
+
+        async def call_next(_request: Request) -> Response:
+            return Response(status_code=201)
+
+        response = await middleware.dispatch(
+            _http_request("POST", "/api/v1/auth/register"), call_next
+        )
+
+        assert response.headers["X-Request-ID"]
+        pending = set(audit._pending_writes)
+        assert len(pending) == 1  # held while the write is still running
+
+        release.set()
+        await asyncio.gather(*pending)
+        await asyncio.sleep(0)  # let the done callback run
+
+        assert written == ["auth.register"]
+        assert not audit._pending_writes
+
+    async def test_starts_no_write_for_an_unaudited_request(self, monkeypatch):
+        monkeypatch.setattr(audit, "_write_audit_log", MagicMock())
+        middleware = audit.AuditMiddleware(app=MagicMock())
+
+        async def call_next(_request: Request) -> Response:
+            return Response(status_code=200)
+
+        response = await middleware.dispatch(_http_request("GET", "/health"), call_next)
+
+        assert "X-Request-ID" not in response.headers
+        assert not audit._pending_writes
+        audit._write_audit_log.assert_not_called()
 
 
 # ── Rate limit string helpers ─────────────────────────────────────
