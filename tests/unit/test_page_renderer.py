@@ -9,7 +9,11 @@ import struct
 import fitz
 import pytest
 
-from src.services.page_renderer import RenderedPage, render_pdf_page
+from src.services.page_renderer import (
+    MAX_RENDER_PIXELS,
+    RenderedPage,
+    render_pdf_page,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -81,3 +85,28 @@ class TestRenderPdfPage:
         pdf = _make_pdf(["content"])
         rendered = render_pdf_page(pdf, 1, highlight_text="   ")
         assert not rendered.highlight_found
+
+
+class TestRenderSizeCap:
+    """A crafted PDF with a huge page must not render a gigapixel image."""
+
+    @staticmethod
+    def _huge_page_pdf() -> bytes:
+        doc = fitz.open()
+        page = doc.new_page(width=14400, height=14400)  # largest PDF page size
+        page.insert_text((72, 72), "tiny text on a huge page", fontsize=11)
+        data = doc.tobytes()
+        doc.close()
+        return data
+
+    def test_huge_page_is_rendered_within_the_pixel_cap(self):
+        rendered = render_pdf_page(self._huge_page_pdf(), 1, scale=3.0)
+        width, height = _png_dimensions(rendered.png)
+        assert width * height <= MAX_RENDER_PIXELS
+        assert width > 1000  # still a usable image, just smaller
+
+    def test_normal_page_keeps_the_requested_scale(self):
+        pdf = _make_pdf(["A4 page"])
+        w1, h1 = _png_dimensions(render_pdf_page(pdf, 1, scale=1.0).png)
+        w3, h3 = _png_dimensions(render_pdf_page(pdf, 1, scale=3.0).png)
+        assert (w3, h3) == (w1 * 3, h1 * 3)

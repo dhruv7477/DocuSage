@@ -31,6 +31,7 @@ from src.core.logger import get_logger
 from src.models.chat import Chat, Message, MessageRole
 from src.models.user import User
 from src.providers.llm.base import LLMMessage
+from src.services.membership import assert_workspace_member
 from src.services.rag_service import CitedSource
 
 log = get_logger(__name__)
@@ -54,7 +55,12 @@ class ChatService:
         user: User,
         title: str | None = None,
     ) -> Chat:
-        """Create a new chat session."""
+        """Create a new chat session in a workspace the user belongs to.
+
+        Raises:
+            WorkspaceAccessDeniedError: the user is not a member
+        """
+        await assert_workspace_member(self._db, workspace_id, user.id)
         chat = Chat(
             workspace_id=workspace_id,
             user_id=user.id,
@@ -64,6 +70,19 @@ class ChatService:
         self._db.add(chat)
         await self._db.flush()
         log.info("chat_created", chat_id=str(chat.id), user_id=str(user.id))
+        return chat
+
+    async def get_chat_for_question(self, chat_id: uuid.UUID, user: User) -> Chat:
+        """Fetch a chat the user owns and may still ask questions in.
+
+        Owners removed from the workspace can read their old chats but not
+        ask new questions there.
+
+        Raises:
+            ChatNotFoundError, ChatAccessDeniedError, WorkspaceAccessDeniedError
+        """
+        chat = await self.get_chat(chat_id, user)
+        await assert_workspace_member(self._db, chat.workspace_id, user.id)
         return chat
 
     async def get_chat(self, chat_id: uuid.UUID, user: User) -> Chat:

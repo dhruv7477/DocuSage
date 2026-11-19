@@ -47,6 +47,13 @@ x-app-env: &app-env
   EMBEDDING_PROVIDER: bge
   EMBEDDING_DEVICE: cpu
   LOG_LEVEL: INFO
+  # Abuse controls for a public URL (see DECISIONS_PENDING.md, D7). Rate-limit
+  # counters live in Redis db 3 so restarts and every process share them.
+  RATE_LIMIT_STORAGE_URI: redis://:${REDIS_PASSWORD}@redis:6379/3
+  RATE_LIMIT_CHAT_PER_MINUTE: "10"
+  QUOTA_MAX_DOCUMENTS: ${QUOTA_MAX_DOCUMENTS:-5}
+  QUOTA_MAX_UPLOAD_MB: ${QUOTA_MAX_UPLOAD_MB:-25}
+  QUOTA_QUESTIONS_PER_DAY: ${QUOTA_QUESTIONS_PER_DAY:-30}
 
 x-app: &app
   build:

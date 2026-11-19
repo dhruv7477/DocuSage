@@ -245,6 +245,9 @@ class TestQueryEndpoint:
             with patch("src.api.v1.chat.ChatService") as MockCS:
                 mock_svc = AsyncMock()
                 mock_svc.get_chat.side_effect = ChatNotFoundError("Chat not found.")
+                mock_svc.get_chat_for_question.side_effect = ChatNotFoundError(
+                    "Chat not found."
+                )
                 MockCS.return_value = mock_svc
                 with _auth_as(test_app, mock_user), _rag_as(test_app, MagicMock()):
                     resp = c.post(
@@ -294,6 +297,7 @@ class TestQueryEndpoint:
             with patch("src.api.v1.chat.ChatService") as MockCS:
                 mock_svc = AsyncMock()
                 mock_svc.get_chat.return_value = mock_chat
+                mock_svc.get_chat_for_question.return_value = mock_chat
                 mock_svc.load_history.return_value = []
                 mock_svc.save_user_message.return_value = MagicMock()
                 mock_svc.save_assistant_message.return_value = mock_assistant_msg
@@ -398,6 +402,7 @@ class TestSSEStreamEndpoint:
                 with patch("src.api.v1.chat.ChatService") as MockCS:
                     mock_svc = AsyncMock()
                     mock_svc.get_chat.return_value = mock_chat
+                    mock_svc.get_chat_for_question.return_value = mock_chat
                     mock_svc.load_history.return_value = []
                     mock_svc.save_user_message.return_value = MagicMock()
                     mock_svc.save_assistant_message.return_value = mock_assistant_msg
@@ -518,6 +523,7 @@ class TestSSEStreamEndpoint:
                 with patch("src.api.v1.chat.ChatService") as MockCS:
                     mock_svc = AsyncMock()
                     mock_svc.get_chat.return_value = mock_chat
+                    mock_svc.get_chat_for_question.return_value = mock_chat
                     mock_svc.load_history.return_value = []
                     mock_svc.save_user_message.return_value = MagicMock()
                     MockCS.return_value = mock_svc

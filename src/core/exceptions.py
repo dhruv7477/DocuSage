@@ -101,6 +101,13 @@ class WorkspaceLimitReachedError(PrivateAIException):
     error_code = "WORKSPACE_LIMIT_REACHED"
 
 
+class QuotaExceededError(PrivateAIException):
+    """A per-user quota (documents, storage, questions per day) is used up."""
+
+    status_code = HTTPStatus.TOO_MANY_REQUESTS.value
+    error_code = "QUOTA_EXCEEDED"
+
+
 # ── Document Exceptions ──────────────────────────────────────────
 
 

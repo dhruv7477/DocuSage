@@ -35,31 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.session import get_db
 from src.services.document_service import DocumentService
-from src.services.storage_service import StorageService
-
-
-class InMemoryStorage(StorageService):
-    """StorageService that keeps objects in a dict instead of an S3 bucket.
-
-    Only the blocking client calls are replaced, so path building and the
-    retry wrapper are the real code.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.objects: dict[str, bytes] = {}
-
-    def _upload_sync(self, content: bytes, path: str, content_type: str) -> None:
-        self.objects[path] = content
-
-    def _download_sync(self, path: str) -> bytes:
-        return self.objects[path]
-
-    def _delete_sync(self, path: str) -> None:
-        self.objects.pop(path, None)
-
-    def _presigned_sync(self, path: str, expires: int) -> str:
-        return f"memory://{path}"
+from tests.fakes import InMemoryStorage
 
 
 SMOKE_FILE = (
@@ -89,6 +65,23 @@ def _document_row_committed(document_id: str) -> bool:
                 text("SELECT 1 FROM documents WHERE id = :id"), {"id": document_id}
             ).first()
         return row is not None
+    finally:
+        engine.dispose()
+
+
+def _set_role(user_id: str, role: str) -> None:
+    """Change a user's global role directly in the database."""
+    from sqlalchemy import create_engine, text
+
+    from src.configs.config import get_settings
+
+    engine = create_engine(get_settings().database_url_sync)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("UPDATE users SET role = :role WHERE id = :id"),
+                {"role": role, "id": user_id},
+            )
     finally:
         engine.dispose()
 
@@ -402,7 +395,16 @@ class TestSmokePipeline:
         assert resp.status_code == 403
 
     def test_18_eval_run(self, client, state):
-        """Eval endpoint accepts a Q&A pair and returns metrics."""
+        """Eval is admin-only: a member gets 403, an admin gets metrics."""
+        body = {
+            "question": "What is DocuSage?",
+            "answer": "A RAG-powered knowledge assistant.",
+            "contexts": ["DocuSage is an AI assistant for private documents."],
+        }
+        member = client.post("/api/v1/eval/run", json=body, headers=state["headers"])
+        assert member.status_code == 403
+
+        _set_role(state["user_id"], "admin")
         with patch("src.services.eval_service.EvalService.evaluate") as mock_eval:
             from src.services.eval_service import EvalResult
 
@@ -416,15 +418,7 @@ class TestSmokePipeline:
                 context_recall=None,
                 answer_similarity=None,
             )
-            resp = client.post(
-                "/api/v1/eval/run",
-                json={
-                    "question": "What is DocuSage?",
-                    "answer": "A RAG-powered knowledge assistant.",
-                    "contexts": ["DocuSage is an AI assistant for private documents."],
-                },
-                headers=state["headers"],
-            )
+            resp = client.post("/api/v1/eval/run", json=body, headers=state["headers"])
         assert resp.status_code == 200
         data = resp.json()
         assert "composite_score" in data

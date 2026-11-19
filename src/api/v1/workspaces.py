@@ -7,9 +7,10 @@ All routes require authentication via Depends(get_current_user).
 
 import uuid
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.rate_limit import limiter, setting_limit
 from src.db.session import get_db
 from src.dependencies import get_current_user
 from src.models.user import User
@@ -123,7 +124,9 @@ async def delete_workspace(
     status_code=status.HTTP_201_CREATED,
     summary="Add a member to the workspace by email (admin only)",
 )
+@limiter.limit(setting_limit("rate_limit_member_add"))
 async def add_member(
+    request: Request,
     workspace_id: uuid.UUID,
     payload: AddMemberRequest,
     current_user: User = Depends(get_current_user),

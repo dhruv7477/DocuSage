@@ -20,6 +20,7 @@ from fastapi import (
     Form,
     HTTPException,
     Query,
+    Request,
     Response,
     UploadFile,
     status,
@@ -27,12 +28,14 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.logger import get_logger
+from src.core.rate_limit import limiter, setting_limit
 from src.db.session import get_db
 from src.dependencies import get_current_user
 from src.models.document import DocumentStatus, DocumentType
 from src.models.user import User
 from src.schemas.document import DocumentListResponse, DocumentResponse
 from src.services.document_service import DocumentService
+from src.services.quota_service import QuotaService
 from src.services.storage_service import StorageService
 
 log = get_logger(__name__)
@@ -41,7 +44,7 @@ router = APIRouter(prefix="/documents", tags=["Documents"])
 
 
 def _get_service(db: AsyncSession = Depends(get_db)) -> DocumentService:
-    return DocumentService(db, StorageService())
+    return DocumentService(db, StorageService(), QuotaService(db))
 
 
 @router.post(
@@ -50,7 +53,9 @@ def _get_service(db: AsyncSession = Depends(get_db)) -> DocumentService:
     status_code=status.HTTP_202_ACCEPTED,
     summary="Upload a document for ingestion (PDF, DOCX, TXT, MD, HTML)",
 )
+@limiter.limit(setting_limit("rate_limit_upload"))
 async def upload_document(
+    request: Request,
     workspace_id: uuid.UUID = Form(...),
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
@@ -174,7 +179,9 @@ async def get_document_file(
     summary="Render one PDF page to PNG with the cited passage highlighted",
     response_class=Response,
 )
+@limiter.limit(setting_limit("rate_limit_page_image"))
 async def get_document_page_image(
+    request: Request,
     document_id: uuid.UUID,
     page: int = Query(..., ge=1, description="1-based page number"),
     chunk_id: str | None = Query(

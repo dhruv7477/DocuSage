@@ -42,6 +42,22 @@ interface UseSSEReturn extends StreamState {
   dismissError: () => void
 }
 
+/** The server refused the stream before it started (quota, rate limit, access). */
+class StreamRefusedError extends Error {}
+
+/** User-facing message for a non-stream response, preferring the server's own. */
+export async function refusalMessage(response: Response): Promise<string> {
+  try {
+    const body = await response.json()
+    if (body && typeof body.message === 'string' && body.message) return body.message
+  } catch {
+    // not JSON: fall through to a message based on the status
+  }
+  if (response.status === 429) return 'Too many requests. Please wait a moment and try again.'
+  if (response.status === 401) return 'Your session has expired. Please sign in again.'
+  return `The assistant could not respond (HTTP ${response.status}).`
+}
+
 const initialState: StreamState = {
   streaming: false,
   stage: null,
@@ -97,6 +113,15 @@ export function useSSE(): UseSSEReturn {
         })
         throw new Error('SSE connection closed by server')
       },
+      // Errors raised before streaming starts (quota, rate limit, access)
+      // arrive as a JSON response. Show the server's message.
+      async onopen(response) {
+        const type = response.headers.get('content-type') ?? ''
+        if (response.ok && type.startsWith('text/event-stream')) return
+        const message = await refusalMessage(response)
+        setState((s) => ({ ...s, streaming: false, stage: null, error: message }))
+        throw new StreamRefusedError(message)
+      },
       onmessage(e) {
         try {
           const event = JSON.parse(e.data)
@@ -147,7 +172,7 @@ export function useSSE(): UseSSEReturn {
         }
       },
       onerror(err) {
-        if ((err as Error).name !== 'AbortError') {
+        if ((err as Error).name !== 'AbortError' && !(err instanceof StreamRefusedError)) {
           setState((s) => ({
             ...s,
             streaming: false,

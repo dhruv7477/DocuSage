@@ -10,6 +10,7 @@ Every route does: validate input → call service → return schema.
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.rate_limit import client_ip_key, limiter, setting_limit
 from src.db.session import get_db
 from src.dependencies import get_current_user
 from src.models.user import User
@@ -34,7 +35,9 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
     status_code=status.HTTP_201_CREATED,
     summary="Register a new user account",
 )
+@limiter.limit(setting_limit("rate_limit_register"), key_func=client_ip_key)
 async def register(
+    request: Request,
     payload: RegisterRequest,
     db: AsyncSession = Depends(get_db),
 ) -> RegisterResponse:
@@ -48,7 +51,9 @@ async def register(
     response_model=TokenResponse,
     summary="Login and receive access + refresh tokens",
 )
+@limiter.limit(setting_limit("rate_limit_auth"), key_func=client_ip_key)
 async def login(
+    request: Request,
     payload: LoginRequest,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
@@ -61,7 +66,9 @@ async def login(
     response_model=TokenResponse,
     summary="Sign in / sign up with a Google ID token",
 )
+@limiter.limit(setting_limit("rate_limit_auth"), key_func=client_ip_key)
 async def google_login(
+    request: Request,
     payload: GoogleLoginRequest,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
@@ -74,7 +81,9 @@ async def google_login(
     response_model=TokenResponse,
     summary="Exchange refresh token for new token pair",
 )
+@limiter.limit(setting_limit("rate_limit_auth"), key_func=client_ip_key)
 async def refresh_tokens(
+    request: Request,
     payload: RefreshTokenRequest,
     db: AsyncSession = Depends(get_db),
 ) -> TokenResponse:
