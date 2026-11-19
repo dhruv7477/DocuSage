@@ -1,5 +1,5 @@
 [run]
-# Coverage for src/ only, with paths relative to the repository root, as
-# SonarQube Cloud expects.
-source = src
+# Coverage for the app (src/) and the CI tools (scripts/), with paths
+# relative to the repository root, as SonarQube Cloud expects.
+source = src, scripts
 relative_files = True
