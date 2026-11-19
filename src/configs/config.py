@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     celery_broker_url: str = "redis://localhost:6379/1"
     celery_result_backend: str = "redis://localhost:6379/2"
+    # Documents in flight for longer than this are marked FAILED by the
+    # stale-document sweep. Must exceed the longest legitimate wait
+    # (queue time plus task_time_limit and retries).
+    ingestion_stale_after_minutes: int = Field(default=60, ge=5)
 
     # ── Vector DB ────────────────────────────────────────────────
     vector_store: Literal["qdrant", "pinecone", "weaviate"] = "qdrant"

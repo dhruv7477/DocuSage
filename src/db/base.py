@@ -28,6 +28,12 @@ class TimestampMixin:
     from the application layer.
     """
 
+    # Fetch server-generated values with RETURNING on INSERT and UPDATE.
+    # Without this, updated_at is expired after an UPDATE flush, and the
+    # next read lazy-loads it, which async sessions reject with
+    # MissingGreenlet (seen as a 500 on re-upload).
+    __mapper_args__ = {"eager_defaults": True}
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

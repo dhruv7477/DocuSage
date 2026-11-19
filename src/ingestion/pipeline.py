@@ -268,7 +268,9 @@ class IngestionPipeline:
     ) -> None:
         document.status = status
         document.progress = progress
-        await db.flush()
+        # Commit, not flush: the API reads status in its own transaction,
+        # so an uncommitted stage is invisible until the whole run ends.
+        await db.commit()
 
     async def _mark_failed(
         self,

@@ -62,6 +62,37 @@ class InMemoryStorage(StorageService):
         return f"memory://{path}"
 
 
+SMOKE_FILE = (
+    b"DocuSage smoke test document.\nThis is paragraph one.\nThis is paragraph two."
+)
+
+
+def _upload(client: TestClient, state: dict, filename: str):
+    return client.post(
+        "/api/v1/documents/upload",
+        data={"workspace_id": state["workspace_id"]},
+        files={"file": (filename, BytesIO(SMOKE_FILE), "text/plain")},
+        headers=state["headers"],
+    )
+
+
+def _document_row_committed(document_id: str) -> bool:
+    """Look for the row from a separate connection, as the worker would."""
+    from sqlalchemy import create_engine, text
+
+    from src.configs.config import get_settings
+
+    engine = create_engine(get_settings().database_url_sync)
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT 1 FROM documents WHERE id = :id"), {"id": document_id}
+            ).first()
+        return row is not None
+    finally:
+        engine.dispose()
+
+
 def _postgres_reachable() -> bool:
     """The smoke pipeline writes real rows — it needs a live Postgres."""
     from src.configs.config import get_settings
@@ -210,16 +241,19 @@ class TestSmokePipeline:
         assert state["workspace_id"] in ids
 
     def test_07_upload_document(self, client, state):
-        """Upload a text document — Celery dispatch is mocked."""
-        file_content = b"DocuSage smoke test document.\nThis is paragraph one.\nThis is paragraph two."
+        """Upload a text document. Celery dispatch is mocked.
+
+        The worker reads the row in its own transaction, so the row must
+        already be committed when the task is queued.
+        """
+        committed_at_dispatch: list[bool] = []
         with patch("src.workers.tasks.ingest_document_task") as mock_task:
-            mock_task.delay = MagicMock()
-            resp = client.post(
-                "/api/v1/documents/upload",
-                data={"workspace_id": state["workspace_id"]},
-                files={"file": ("smoke_test.txt", BytesIO(file_content), "text/plain")},
-                headers=state["headers"],
+            mock_task.delay = MagicMock(
+                side_effect=lambda doc_id: committed_at_dispatch.append(
+                    _document_row_committed(doc_id)
+                )
             )
+            resp = _upload(client, state, "smoke_test.txt")
         assert resp.status_code == 202, resp.text
         data = resp.json()
         # `filename` is the storage-safe "{uuid}.txt"; the user-visible
@@ -227,7 +261,27 @@ class TestSmokePipeline:
         assert data["original_filename"] == "smoke_test.txt"
         assert data["filename"].endswith(".txt")
         assert data["status"] in ("pending", "PENDING")
+        assert committed_at_dispatch == [True]
         state["document_id"] = data["id"]
+
+    def test_07b_reupload_same_filename(self, client, state):
+        """Re-uploading a filename resets the same document (was a 500)."""
+        with patch("src.workers.tasks.ingest_document_task") as mock_task:
+            mock_task.delay = MagicMock()
+            resp = _upload(client, state, "smoke_test.txt")
+        assert resp.status_code == 202, resp.text
+        assert resp.json()["id"] == state["document_id"]
+        assert resp.json()["status"] == "pending"
+        mock_task.delay.assert_called_once_with(state["document_id"])
+
+    def test_07c_dispatch_failure_marks_document_failed(self, client, state):
+        """A broker outage returns the document as FAILED (was a 500)."""
+        with patch("src.workers.tasks.ingest_document_task") as mock_task:
+            mock_task.delay = MagicMock(side_effect=ConnectionError("broker down"))
+            resp = _upload(client, state, "smoke_broker_down.txt")
+        assert resp.status_code == 202, resp.text
+        assert resp.json()["status"] == "failed"
+        assert "Failed to queue" in resp.json()["error_message"]
 
     def test_08_list_documents(self, client, state):
         """Uploaded document appears in the list."""
