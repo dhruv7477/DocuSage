@@ -1,0 +1,13 @@
+# gitleaks configuration: the default rules, plus an allowlist for values
+# that look like secrets but are fakes used only by the tests and the CI
+# service containers. They protect nothing and are public on purpose.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Fake keys for tests and CI services"
+regexTarget = "secret"
+regexes = [
+  '''^test-secret-key-[a-z0-9-]+$''',
+  '''^ci-[a-z0-9-]*not-a-real[a-z0-9-]*$''',
+]

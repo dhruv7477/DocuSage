@@ -3,32 +3,33 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /src
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY requirements.txt constraints.txt ./
 # torch comes from the CPU-only index first. On amd64, PyPI's torch wheel pulls
 # several GB of CUDA libraries this app never uses. The version is read from
-# constraints.txt so it is pinned in one place.
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir "$(grep '^torch==' constraints.txt)" \
+# constraints.txt so it is pinned in one place. Wheels only, so no package's
+# setup script runs during the build.
+RUN pip install --no-cache-dir --only-binary :all: "$(grep '^torch==' constraints.txt)" \
         --index-url https://download.pytorch.org/whl/cpu \
-    && pip install --no-cache-dir -r requirements.txt -c constraints.txt
+    && pip install --no-cache-dir --only-binary :all: -r requirements.txt -c constraints.txt \
+    && pip uninstall -y pip
 
 # ── Runtime Stage ──────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
 
 WORKDIR /src
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# upgrade: security fixes released since the base image was built.
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
     postgresql-client \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip uninstall -y pip
 
-# Copy installed packages from builder
+# Copy installed packages from builder. Neither stage keeps pip: it is not
+# needed at run time, and it vendors old copies of other packages that
+# scanners report.
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 

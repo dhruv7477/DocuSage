@@ -1,0 +1,5 @@
+[run]
+# Coverage for src/ only, with paths relative to the repository root, as
+# SonarQube Cloud expects.
+source = src
+relative_files = True

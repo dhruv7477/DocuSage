@@ -1,0 +1,258 @@
+name: Security
+
+# Every pull request and push to master, and weekly, because new advisories
+# appear for code that has not changed. Detailed results go to the Security
+# tab as SARIF; the logs show pass or fail and counts.
+on:
+  pull_request:
+  push:
+    branches: [master]
+  schedule:
+    - cron: "17 5 * * 1" # Mondays 05:17 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+  PIP_AUDIT_VERSION: "2.10.1"
+  # Scanner images are pinned by digest.
+  GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+  TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:2.17.0@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af
+
+jobs:
+  # ── SCA: what a pull request adds ───────────────────────────────
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      # Dependency review needs the repository's dependency graph. Until it
+      # is switched on (Settings, Advanced Security), skip with a notice.
+      - name: Dependency graph enabled?
+        id: graph
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/dependency-graph/sbom" --silent 2>/dev/null; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=Dependency review skipped::The dependency graph is off for this repository, so there is nothing to review."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.graph.outputs.enabled == 'true'
+        with:
+          persist-credentials: false
+      # Fails when the pull request adds a dependency with a high or
+      # critical advisory.
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        if: steps.graph.outputs.enabled == 'true'
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: never
+
+  # ── SCA: everything pinned ──────────────────────────────────────
+  pip-audit:
+    name: Python dependencies (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install pip-audit
+        run: |
+          pip install --only-binary :all: "pip-audit==${PIP_AUDIT_VERSION}"
+      # constraints.txt pins every package, direct and transitive, so it is
+      # audited as is. The gate fails on any vulnerability with a released fix.
+      - name: Audit constraints.txt
+        run: |
+          pip-audit -r constraints.txt --no-deps --disable-pip --progress-spinner off \
+            -f json -o "$RUNNER_TEMP/pip-audit.json" || true
+          python scripts/security/pip_audit_gate.py "$RUNNER_TEMP/pip-audit.json"
+
+  npm-audit:
+    name: Frontend dependencies (npm audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # What ships to the browser. Build tools are covered by Dependabot
+      # alerts and by dependency review on each pull request.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  # ── Secrets in the full git history ─────────────────────────────
+  gitleaks:
+    name: Secrets (gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # every commit on every branch
+          persist-credentials: false
+      - name: Scan all commits
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo" "$GITLEAKS_IMAGE" \
+            git /repo --config /repo/.gitleaks.toml --log-opts="--all" \
+            --redact --no-banner --report-format sarif --report-path /repo/gitleaks.sarif
+      - name: Upload to the Security tab
+        if: always() && hashFiles('gitleaks.sarif') != ''
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        with:
+          sarif_file: gitleaks.sarif
+          category: gitleaks
+
+  # ── Container images ────────────────────────────────────────────
+  trivy:
+    name: Image ${{ matrix.image }} (Trivy)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api
+            dockerfile: docker/Dockerfile
+          - image: web
+            dockerfile: docker/Dockerfile.web
+    env:
+      IMAGE: docusage-${{ matrix.image }}:scan
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          load: true
+          tags: ${{ env.IMAGE }}
+          cache-from: type=gha,scope=trivy-${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=trivy-${{ matrix.image }}
+      # The gate: HIGH and CRITICAL vulnerabilities that have a fix.
+      - name: HIGH and CRITICAL with a fix
+        run: |
+          mkdir -p "$RUNNER_TEMP/trivy-cache"
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" "$TRIVY_IMAGE" \
+            image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+            --exit-code 1 --no-progress "$IMAGE"
+      # The same findings as SARIF for the Security tab. Findings without a
+      # fix stay out: the Debian base alone has hundreds, which would bury
+      # the actionable ones. Dependabot alerts track library advisories.
+      - name: SARIF report
+        if: always()
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" -v "$PWD:/out" "$TRIVY_IMAGE" \
+            image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+            --format sarif --output "/out/trivy-${{ matrix.image }}.sarif" --no-progress "$IMAGE"
+      - name: Upload to the Security tab
+        if: always() && hashFiles(format('trivy-{0}.sarif', matrix.image)) != ''
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        with:
+          sarif_file: trivy-${{ matrix.image }}.sarif
+          category: trivy-${{ matrix.image }}
+
+  # ── DAST ────────────────────────────────────────────────────────
+  # OWASP ZAP against a disposable copy of the demo stack, started exactly as
+  # the end-to-end job starts it (behind Caddy on https://localhost, mock
+  # LLM), with rate limits and quotas off so the API scan is not throttled.
+  # Never against a live server.
+  zap:
+    name: DAST (OWASP ZAP, arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      COMPOSE: docker compose -f docker/docker-compose.demo.yml -f tests/e2e/compose.e2e.yml -f tests/e2e/compose.dast.yml
+      ZAP_WRK: ${{ github.workspace }}/zap
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Start the demo stack
+        run: tests/e2e/start-stack.sh tests/e2e/compose.dast.yml
+
+      - name: Prepare the scan
+        run: |
+          mkdir -p "$ZAP_WRK"
+          # Caddy's local CA, so curl verifies https://localhost.
+          ca="$RUNNER_TEMP/caddy-root.crt"
+          $COMPOSE cp caddy:/data/caddy/pki/authorities/local/root.crt "$ca"
+          cp tests/security/zap/rules.tsv "$ZAP_WRK/"
+          # The OpenAPI schema comes from the running app; the app itself
+          # serves no /docs or /openapi.json in production.
+          $COMPOSE exec -T -e PYTHONPATH=/src api \
+            python scripts/security/export_openapi.py --server https://localhost - \
+            > "$ZAP_WRK/openapi.json"
+          # A throwaway account, so the API scan runs signed in.
+          email="zap-$(date +%s)@example.com"
+          password="Zap-$(openssl rand -hex 12)-Aa1"
+          curl -sf --cacert "$ca" https://localhost/api/v1/auth/register -H 'Content-Type: application/json' \
+            -d "{\"email\":\"$email\",\"password\":\"$password\",\"full_name\":\"ZAP\"}" > /dev/null
+          curl -sf --cacert "$ca" https://localhost/api/v1/auth/login -H 'Content-Type: application/json' \
+            -d "{\"email\":\"$email\",\"password\":\"$password\"}" -o "$RUNNER_TEMP/login.json"
+          token=$(jq -r .access_token "$RUNNER_TEMP/login.json")
+          rm "$RUNNER_TEMP/login.json"
+          echo "::add-mask::$token"
+          echo "ZAP_TOKEN=$token" >> "$GITHUB_ENV"
+          echo "CADDY=$($COMPOSE ps -q caddy)" >> "$GITHUB_ENV"
+          # ZAP runs as uid 1000 and writes its reports here.
+          sudo chown 1000:1000 "$ZAP_WRK"
+
+      # ZAP shares Caddy's network namespace, so https://localhost is the
+      # stack. Exit codes 0 to 2 mean the scan ran (2 = warnings);
+      # zap_report.py decides pass or fail.
+      - name: Baseline scan (passive)
+        run: |
+          docker run --rm --network "container:$CADDY" -v "$ZAP_WRK:/zap/wrk:rw" "$ZAP_IMAGE" \
+            zap-baseline.py -t https://localhost -c rules.tsv -J baseline.json -I || test $? -le 2
+
+      - name: API scan (active, signed in)
+        run: |
+          docker run --rm --network "container:$CADDY" -v "$ZAP_WRK:/zap/wrk:rw" \
+            -e ZAP_AUTH_HEADER=Authorization -e ZAP_AUTH_HEADER_VALUE="Bearer $ZAP_TOKEN" \
+            -e ZAP_AUTH_HEADER_SITE=localhost "$ZAP_IMAGE" \
+            zap-api-scan.py -t /zap/wrk/openapi.json -f openapi -c rules.tsv -J api.json -I \
+            -z "-config scanner.maxScanDurationInMins=30 -config scanner.maxRuleDurationInMins=3" \
+            || test $? -le 2
+
+      - name: Fail on High, report Medium
+        run: python3 scripts/security/zap_report.py --sarif zap.sarif "$ZAP_WRK/baseline.json" "$ZAP_WRK/api.json"
+
+      - name: Upload to the Security tab
+        if: always() && hashFiles('zap.sarif') != ''
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        with:
+          sarif_file: zap.sarif
+          category: zap
+
+      - name: Service logs
+        if: failure()
+        run: $COMPOSE logs --tail=100 api caddy

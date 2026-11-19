@@ -1,0 +1,13 @@
+# Test-only override for the DAST job, on top of tests/e2e/compose.e2e.yml.
+# The ZAP API scan sends thousands of requests with one test account, so the
+# rate limits and quotas are off (the integration tests cover them), and the
+# access token outlives the scan.
+services:
+  api:
+    environment:
+      RATE_LIMIT_ENABLED: "false"
+      QUOTA_MAX_DOCUMENTS: "0"
+      QUOTA_MAX_UPLOAD_MB: "0"
+      QUOTA_QUESTIONS_PER_DAY: "0"
+      DEMO_GLOBAL_QUESTIONS_PER_DAY: "0"
+      ACCESS_TOKEN_EXPIRE_MINUTES: "120"

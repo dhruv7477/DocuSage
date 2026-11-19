@@ -6,19 +6,37 @@
 # Access logs are off on purpose: the chat stream carries the question in the
 # URL, and the demo does not keep visitors' questions.
 
+{
+	# Clients that send no server name (Java, and so ZAP, for "localhost")
+	# still get this site's certificate.
+	default_sni {$DEMO_DOMAIN:demo.example.com}
+}
+
 {$DEMO_DOMAIN:demo.example.com} {
 	encode zstd gzip
 
+	# Security headers on every response. The CSP allows only this site,
+	# Google Fonts, and Google's sign-in script (loaded even when sign-in is
+	# off). style-src needs 'unsafe-inline' for the inline style in
+	# index.html and the toast library's injected styles; scripts stay
+	# strict. blob: images are the cited page previews.
 	header {
+		Content-Security-Policy "default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com/gsi/style; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		Strict-Transport-Security "max-age=31536000"
+		X-Frame-Options DENY
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		Cross-Origin-Opener-Policy same-origin-allow-popups
+		Cross-Origin-Resource-Policy same-origin
 		-Server
 	}
 
 	# API, including the SSE chat stream. flush_interval -1 forwards each
 	# event as soon as the app writes it. Uploads are capped just above the
 	# app's own 50 MB limit, so the app still returns its JSON error.
-	handle /api/* {
+	@api path /api /api/*
+	handle @api {
 		request_body {
 			max_size 51MB
 		}
