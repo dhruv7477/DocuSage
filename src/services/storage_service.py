@@ -1,7 +1,7 @@
 """
 src/services/storage_service.py
 ─────────────────────────────────
-File storage service — abstracts S3 and MinIO behind a common interface.
+File storage service: any S3-compatible server or Amazon S3 behind one interface.
 
 Storage path convention:
     workspaces/{workspace_id}/documents/{user_id}/{document_id}/{filename}
@@ -58,6 +58,11 @@ _CONNECT_TIMEOUT_S = 30.0
 _READ_TIMEOUT_S = 60.0
 
 
+def _s3_compatible() -> bool:
+    """True for the generic S3 client (SeaweedFS, MinIO, ...), False for AWS S3."""
+    return settings.storage_backend != "s3"
+
+
 def _is_transient_error(exc: BaseException) -> bool:
     """True if the exception looks like a network blip we should retry."""
     name = type(exc).__name__
@@ -101,8 +106,8 @@ def _log_retry(retry_state: RetryCallState) -> None:
 
 class StorageService:
     """
-    Wraps MinIO (development) or AWS S3 (production) for file operations.
-    Uses the same boto3/minio interface — switching is one env var change.
+    Wraps an S3-compatible server (minio-py client) or AWS S3 (boto3) for
+    file operations. Switching is one env var change.
     All operations run in executor to avoid blocking the async event loop.
     """
 
@@ -123,7 +128,7 @@ class StorageService:
 
         backend = settings.storage_backend
 
-        if backend == "minio":
+        if _s3_compatible():
             try:
                 import urllib3
                 from minio import Minio
@@ -137,29 +142,27 @@ class StorageService:
                     connect=_CONNECT_TIMEOUT_S, read=_READ_TIMEOUT_S
                 ),
                 retries=urllib3.Retry(total=0),  # tenacity owns retry policy
-                cert_reqs="CERT_REQUIRED" if settings.minio_secure else "CERT_NONE",
+                cert_reqs="CERT_REQUIRED" if settings.s3_secure else "CERT_NONE",
             )
 
             client = Minio(
-                endpoint=settings.minio_endpoint,
-                access_key=settings.minio_access_key,
-                secret_key=settings.minio_secret_key,
-                secure=settings.minio_secure,
+                endpoint=settings.s3_endpoint,
+                access_key=settings.s3_access_key,
+                secret_key=settings.s3_secret_key,
+                secure=settings.s3_secure,
                 http_client=http_client,
             )
-            bucket = settings.minio_bucket
+            bucket = settings.s3_bucket
             try:
                 if not client.bucket_exists(bucket):
                     client.make_bucket(bucket)
             except Exception as exc:
                 if _is_transient_error(exc):
                     raise StorageConnectionError(
-                        f"Cannot reach MinIO at {settings.minio_endpoint}.",
-                        detail="Start the MinIO container (e.g. `docker compose up minio`) and retry.",
+                        f"Cannot reach the S3 server at {settings.s3_endpoint}.",
+                        detail="Start it (`make dev-up` starts SeaweedFS) and retry.",
                     ) from exc
-                raise StorageError(
-                    "MinIO bucket setup failed.", detail=str(exc)
-                ) from exc
+                raise StorageError("S3 bucket setup failed.", detail=str(exc)) from exc
             self._client = client
             self._bucket = bucket
 
@@ -280,7 +283,7 @@ class StorageService:
 
     def _upload_sync(self, content: bytes, path: str, content_type: str) -> None:
         client, bucket = self._get_client()
-        if settings.storage_backend == "minio":
+        if _s3_compatible():
             client.put_object(
                 bucket_name=bucket,
                 object_name=path,
@@ -298,7 +301,7 @@ class StorageService:
 
     def _download_sync(self, path: str) -> bytes:
         client, bucket = self._get_client()
-        if settings.storage_backend == "minio":
+        if _s3_compatible():
             response = client.get_object(bucket, path)
             try:
                 return response.read()
@@ -311,7 +314,7 @@ class StorageService:
 
     def _delete_sync(self, path: str) -> None:
         client, bucket = self._get_client()
-        if settings.storage_backend == "minio":
+        if _s3_compatible():
             client.remove_object(bucket, path)
         else:
             client.delete_object(Bucket=bucket, Key=path)
@@ -320,7 +323,7 @@ class StorageService:
         client, bucket = self._get_client()
         from datetime import timedelta
 
-        if settings.storage_backend == "minio":
+        if _s3_compatible():
             return client.presigned_get_object(
                 bucket, path, expires=timedelta(seconds=expires)
             )

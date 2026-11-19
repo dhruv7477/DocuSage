@@ -39,6 +39,11 @@ log = get_logger(__name__)
 # in the UI without a second LLM call.
 _OFF_TOPIC_SLICE = 40
 
+SUMMARIES_DISABLED_MESSAGE = (
+    "Whole-document summaries are turned off on this server to stay within "
+    "its LLM limits. This answer uses the most relevant passages instead."
+)
+
 
 @dataclass
 class StreamPlan:
@@ -62,11 +67,13 @@ class ChatOrchestrator:
         summary_service: DocSummaryService,
         *,
         enable_router: bool = True,
+        enable_summaries: bool = True,
     ) -> None:
         self._analyzer = analyzer
         self._rag = rag_service
         self._summary = summary_service
         self._enable_router = enable_router
+        self._enable_summaries = enable_summaries
 
     async def prepare(
         self,
@@ -96,6 +103,19 @@ class ChatOrchestrator:
             )
         else:
             decision = RouteDecision(intent="rag_query")
+
+        if decision.intent == "doc_summary" and not self._enable_summaries:
+            # A summary costs several LLM calls; answer from the most
+            # relevant passages instead, and say so.
+            decision = RouteDecision(intent="rag_query")
+            emit(
+                {
+                    "type": "warning",
+                    "code": "summaries_disabled",
+                    "message": SUMMARIES_DISABLED_MESSAGE,
+                    "confidence": 1.0,
+                }
+            )
 
         emit({"type": "route", "intent": decision.intent})
         emit({"type": "thinking", "stage": "routing"})

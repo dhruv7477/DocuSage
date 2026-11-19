@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from src.configs.config import Settings
+from src.configs.config import DEPRECATED_STORAGE_NAMES, Settings
 
 pytestmark = pytest.mark.unit
 
@@ -17,7 +17,8 @@ def _template_keys() -> list[str]:
 
 
 def test_env_example_loads_as_a_valid_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in _template_keys():  # the template's values, not the test env's
+    # The template's values, not the test env's (which may use old names).
+    for key in [*_template_keys(), *(k.upper() for k in DEPRECATED_STORAGE_NAMES)]:
         monkeypatch.delenv(key, raising=False)
 
     settings = Settings(_env_file=TEMPLATE)
@@ -29,6 +30,8 @@ def test_env_example_loads_as_a_valid_config(monkeypatch: pytest.MonkeyPatch) ->
     ]
     assert len(settings.secret_key) >= 32
     assert settings.qdrant_collection_prefix == "docusage"
+    assert settings.storage_backend == "s3_compatible"
+    assert settings.deprecated_storage_settings() == []
 
 
 def test_env_example_has_no_empty_required_values() -> None:

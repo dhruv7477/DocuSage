@@ -182,6 +182,25 @@ describe('useSSE refused streams', () => {
     expect(thrown).not.toBeNull()
     expect(result.current.streaming).toBe(false)
     expect(result.current.error).toBe('Daily question limit reached (30 per day).')
+    expect(result.current.notice).toBeNull()
+  })
+
+  it("shows the demo's daily budget as a notice, not an error", async () => {
+    const message =
+      "The demo has reached today's limit. Try again tomorrow, or self-host it from the README."
+    const { result, thrown } = await openWith(
+      new Response(JSON.stringify({ error_code: 'DEMO_DAILY_LIMIT', message }), {
+        status: 429,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    expect(thrown).not.toBeNull()
+    expect(result.current.streaming).toBe(false)
+    expect(result.current.error).toBeNull()
+    expect(result.current.notice).toBe(message)
+
+    act(() => result.current.dismissNotice())
+    expect(result.current.notice).toBeNull()
   })
 
   it('falls back to a status-based message for a plain 429', async () => {

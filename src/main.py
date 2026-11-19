@@ -29,6 +29,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from src.api.v1 import api_v1_router
 from src.configs.config import get_settings
 from src.core.audit import AuditMiddleware
+from src.core.deprecations import warn_deprecated_settings
 from src.core.exceptions import DocuSageError
 from src.core.logger import configure_logging, get_logger
 from src.core.rate_limit import limiter
@@ -64,6 +65,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             traces_sample_rate=0.1,
         )
         log.info("sentry_initialized", env=settings.app_env)
+
+    warn_deprecated_settings(settings)
 
     # Register DB session factory on app.state so AuditMiddleware can use it
     app.state.db_session_factory = AsyncSessionLocal

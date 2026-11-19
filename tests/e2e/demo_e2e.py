@@ -177,7 +177,10 @@ def main() -> None:
 
         info = c.get(f"{API}/demo").json()
         check(
-            info["enabled"] and info["questions_per_day"] == 30 and info["llm_host"],
+            info["enabled"]
+            and info["questions_per_day"] == 10
+            and info["site_questions_per_day"] == 50
+            and info["llm_host"],
             f"demo info is public and reports the limits: {info}",
         )
         sample_ws = wait_for_samples(c, h)

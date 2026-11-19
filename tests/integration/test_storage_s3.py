@@ -4,7 +4,7 @@ tests/integration/test_storage_s3.py
 StorageService against a real S3-compatible server: SeaweedFS, which
 replaces MinIO in both compose files. CI starts it from
 docker/seaweedfs/start.sh; locally run the dev compose `seaweedfs`
-service and point MINIO_ENDPOINT at it.
+service and point S3_ENDPOINT at it.
 """
 
 import socket
@@ -19,7 +19,7 @@ from src.services.storage_service import StorageConnectionError, StorageService
 
 
 def _storage_reachable() -> bool:
-    host, _, port = storage_service.settings.minio_endpoint.partition(":")
+    host, _, port = storage_service.settings.s3_endpoint.partition(":")
     try:
         with socket.create_connection((host, int(port or 80)), timeout=2):
             return True
@@ -30,8 +30,8 @@ def _storage_reachable() -> bool:
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
-        storage_service.settings.storage_backend != "minio" or not _storage_reachable(),
-        reason="needs an S3-compatible server at MINIO_ENDPOINT (SeaweedFS)",
+        storage_service.settings.storage_backend == "s3" or not _storage_reachable(),
+        reason="needs an S3-compatible server at S3_ENDPOINT (SeaweedFS)",
     ),
 ]
 
@@ -58,7 +58,7 @@ async def test_round_trip_presigned_url_and_delete() -> None:
 
 
 async def test_wrong_secret_key_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(storage_service.settings, "minio_secret_key", "wrong-secret")
+    monkeypatch.setattr(storage_service.settings, "s3_secret_key", "wrong-secret")
     storage = StorageService()
 
     with pytest.raises(StorageError) as exc_info:
@@ -70,7 +70,7 @@ async def test_wrong_secret_key_is_rejected(monkeypatch: pytest.MonkeyPatch) -> 
 async def test_unreachable_endpoint_is_a_connection_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(storage_service.settings, "minio_endpoint", "127.0.0.1:1")
+    monkeypatch.setattr(storage_service.settings, "s3_endpoint", "127.0.0.1:1")
     storage = StorageService()
 
     with pytest.raises(StorageConnectionError):

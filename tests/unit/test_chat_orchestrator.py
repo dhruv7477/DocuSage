@@ -172,6 +172,28 @@ class TestRouting:
         assert call_kwargs["documents"] == DOCS
 
     @pytest.mark.asyncio
+    async def test_disabled_summaries_answer_from_passages_with_a_warning(self):
+        summary, rag = _mock_summary(), _mock_rag()
+        orch = ChatOrchestrator(
+            _analyzer(RouteDecision(intent="doc_summary")),
+            rag,
+            summary,
+            enable_router=True,
+            enable_summaries=False,
+        )
+        plan, events = await _prepare(orch, query="summarize report.pdf")
+
+        summary.prepare_summary_stream.assert_not_called()
+        rag.prepare_stream.assert_awaited_once()
+        assert plan.intent == "rag_query"
+        assert plan.allow_citations
+        warnings = [e for e in events if e.get("type") == "warning"]
+        assert [w["code"] for w in warnings] == ["summaries_disabled"]
+        assert [e["intent"] for e in events if e.get("type") == "route"] == [
+            "rag_query"
+        ]
+
+    @pytest.mark.asyncio
     async def test_rag_route_sources_are_context_ordered(self):
         rag = _mock_rag()
         orch = ChatOrchestrator(

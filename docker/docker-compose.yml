@@ -34,7 +34,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       QDRANT_URL: http://qdrant:6333
-      MINIO_ENDPOINT: seaweedfs:8333
+      S3_ENDPOINT: seaweedfs:8333
       OLLAMA_BASE_URL: http://ollama:11434
     depends_on:
       postgres:
@@ -75,7 +75,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/1
       CELERY_RESULT_BACKEND: redis://redis:6379/2
       QDRANT_URL: http://qdrant:6333
-      MINIO_ENDPOINT: seaweedfs:8333
+      S3_ENDPOINT: seaweedfs:8333
       OLLAMA_BASE_URL: http://ollama:11434
       SKIP_MIGRATIONS: "true"
     depends_on:
@@ -148,19 +148,19 @@ services:
       retries: 5
 
   # ── SeaweedFS (S3-compatible object storage) ──────────────────
-  # Replaces MinIO, which no longer publishes images. The app's "minio"
-  # storage backend is a generic S3 client, so only the endpoint changed.
-  # Host port 9000 keeps MINIO_ENDPOINT=localhost:9000 working for an
-  # app running on the host. Credentials come from MINIO_ACCESS_KEY and
-  # MINIO_SECRET_KEY in .env.
+  # Replaces MinIO, which no longer publishes images. The app's
+  # s3_compatible storage backend is a generic S3 client.
+  # Host port 9000 keeps S3_ENDPOINT=localhost:9000 working for an app
+  # running on the host. Credentials come from S3_ACCESS_KEY and
+  # S3_SECRET_KEY (or the old MINIO_* names) in the environment.
   seaweedfs:
     image: chrislusf/seaweedfs:4.51
     container_name: docusage-seaweedfs
     ports:
       - "127.0.0.1:9000:8333"   # S3 API
     environment:
-      S3_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      S3_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-${MINIO_ACCESS_KEY:-minioadmin}}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-${MINIO_SECRET_KEY:-minioadmin}}
     entrypoint: ["/bin/sh", "/start.sh"]
     volumes:
       - seaweedfs_data:/data

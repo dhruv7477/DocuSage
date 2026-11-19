@@ -108,6 +108,13 @@ class QuotaExceededError(DocuSageError):
     error_code = "QUOTA_EXCEEDED"
 
 
+class DemoDailyLimitError(DocuSageError):
+    """The site-wide daily question budget is used up (demo deployments)."""
+
+    status_code = HTTPStatus.TOO_MANY_REQUESTS.value
+    error_code = "DEMO_DAILY_LIMIT"
+
+
 # ── Document Exceptions ──────────────────────────────────────────
 
 

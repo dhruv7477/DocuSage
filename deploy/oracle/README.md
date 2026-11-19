@@ -106,8 +106,29 @@ docker compose -f docker/docker-compose.demo.yml up -d --build
 
 Database migrations run automatically when the API container starts.
 
+## 10. Limits and the Groq free tier
+
+The demo defaults are sized for Groq's free tier for `openai/gpt-oss-120b`: about 8K tokens per minute and 200K tokens per day. Check your own limits on the Limits page of the Groq console, because they differ per model and change over time. An answer uses about 3.5K tokens (up to 2.5K of document context, up to 1K of chat history, the prompt and the reply), so the whole demo gets roughly 50 questions a day and 2 a minute.
+
+| Setting | Demo default | What it does |
+|---|---|---|
+| `QUOTA_QUESTIONS_PER_DAY` | 10 | Questions per user per UTC day |
+| `DEMO_GLOBAL_QUESTIONS_PER_DAY` | 50 | Questions per UTC day for all visitors together. After that, visitors see "The demo has reached today's limit. Try again tomorrow, or self-host it from the README." Admins are not blocked. |
+| `RATE_LIMIT_CHAT_PER_MINUTE` | 10 | Questions per user per minute |
+| `DOC_SUMMARY_ENABLED` | false | Whole-document summaries. A summary of 40 chunks is about 13K tokens in under a minute (four map calls of about 2.8K each and a final pass), more than 8K per minute on its own. When off, a summary request gets a normal cited answer and a note that summaries are off. |
+| `SUMMARY_MAX_TOTAL_CHUNKS` | 40 | Chunks per summary, when summaries are on |
+| `LLM_REASONING_EFFORT` | low | Reasoning effort for gpt-oss, whose reasoning tokens count toward the limits |
+| `QUOTA_MAX_DOCUMENTS`, `QUOTA_MAX_UPLOAD_MB` | 5, 25 | Uploaded documents and megabytes per user. Sample documents do not count. |
+
+On a paid tier, set new values in `docker/.env` and run `docker compose -f docker/docker-compose.demo.yml up -d`:
+
+- Set `DEMO_GLOBAL_QUESTIONS_PER_DAY` to about your tokens per day divided by 4,000, which leaves some headroom, or 0 to turn it off.
+- Turn summaries on with `DOC_SUMMARY_ENABLED=true` once your per-minute limit is well above 13K tokens.
+- Raise `QUOTA_QUESTIONS_PER_DAY` and `RATE_LIMIT_CHAT_PER_MINUTE` as you like. 0 turns a quota off.
+
 ## Troubleshooting
 
 - **Browser shows a certificate error.** DNS did not point at the VM when Caddy first started, or port 80 is closed. Fix it, then run `docker compose -f docker/docker-compose.demo.yml restart caddy`.
 - **The site times out from outside, but `curl -k https://localhost` works on the VM.** Check both firewalls: the VCN security list (step 2) and `sudo iptables -L INPUT -n`.
-- **Answers fail with an LLM error.** Groq's free tier limits requests and tokens per minute per model. Check your limits in the Groq console, or set smaller models in `docker/.env` and run `docker compose ... up -d` again.
+- **Answers fail with an LLM error.** Groq's free tier limits requests and tokens per minute per model; see step 10. Also check https://console.groq.com/docs/deprecations: a model that has been shut down fails every call. Set current model IDs in `docker/.env` and run `docker compose ... up -d` again.
+- **The API container does not start and its log shows `llm` not ready.** The key is wrong, or `LLM_MODEL` is not in the provider's model list.

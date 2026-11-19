@@ -142,7 +142,8 @@ export interface DemoInfo {
   enabled: boolean
   max_documents: number // 0 = unlimited
   max_upload_mb: number // 0 = unlimited
-  questions_per_day: number // 0 = unlimited
+  questions_per_day: number // per user; 0 = unlimited
+  site_questions_per_day: number // all users together; 0 = unlimited
   wipe_hour_utc: number | null
   llm_host: string | null
 }

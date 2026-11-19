@@ -47,10 +47,14 @@ class OpenAIProvider(BaseLLMProvider):
         base_url: str = "",
         max_retries: int = 2,
         http_client: httpx.AsyncClient | None = None,
+        reasoning_effort: str = "",
     ) -> None:
         if not api_key:
             raise ValueError("OPENAI_API_KEY is required for the OpenAI provider.")
         self._model = model
+        # Sent only when set: reasoning models (gpt-oss on Groq, OpenAI o-series)
+        # count their reasoning toward the token limits.
+        self._reasoning_effort = reasoning_effort
         self._service = urlsplit(base_url).hostname if base_url else "api.openai.com"
         self._client = AsyncOpenAI(
             api_key=api_key,
@@ -88,11 +92,13 @@ class OpenAIProvider(BaseLLMProvider):
             )
         return LLMProviderError("The AI service failed.", detail=str(exc))
 
-    @staticmethod
-    def _request(cfg: LLMConfig) -> dict:
+    def _request(self, cfg: LLMConfig) -> dict:
         extra: dict = {}
         if cfg.response_format == "json":
             extra["response_format"] = {"type": "json_object"}
+        if self._reasoning_effort:
+            # extra_body: the pinned SDK predates the typed parameter.
+            extra["extra_body"] = {"reasoning_effort": self._reasoning_effort}
         return extra
 
     async def generate(
@@ -151,9 +157,14 @@ class OpenAIProvider(BaseLLMProvider):
             raise self._provider_error(exc) from exc
 
     async def health(self) -> bool:
+        """True if the endpoint answers and lists the configured model.
+
+        Lists the models rather than retrieving one: IDs such as
+        "openai/gpt-oss-120b" contain a slash, which does not survive the
+        /models/{id} path on every OpenAI-compatible server.
+        """
         try:
-            await self._client.models.retrieve(self._model)
-            return True
+            available = {m.id async for m in self._client.models.list()}
         except Exception as exc:
             log.warning(
                 "llm_health_failed",
@@ -162,3 +173,9 @@ class OpenAIProvider(BaseLLMProvider):
                 error_type=type(exc).__name__,
             )
             return False
+        if self._model not in available:
+            log.warning(
+                "llm_model_not_listed", service=self._service, model=self._model
+            )
+            return False
+        return True

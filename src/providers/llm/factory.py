@@ -114,6 +114,7 @@ def _build_llm_provider(model: str) -> BaseLLMProvider:
             timeout=settings.llm_timeout_seconds,
             base_url=settings.openai_base_url,
             max_retries=settings.llm_max_retries,
+            reasoning_effort=settings.llm_reasoning_effort,
         )
 
     raise ValueError(

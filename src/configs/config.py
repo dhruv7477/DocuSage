@@ -7,11 +7,21 @@ This is the ONLY place configuration is read — no os.getenv() elsewhere.
 """
 
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import quote_plus
 
 from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Storage settings renamed when the generic S3 backend replaced "minio".
+# The old names keep working for one release and log a warning at startup.
+DEPRECATED_STORAGE_NAMES: dict[str, str] = {
+    "minio_endpoint": "s3_endpoint",
+    "minio_access_key": "s3_access_key",
+    "minio_secret_key": "s3_secret_key",
+    "minio_bucket": "s3_bucket",
+    "minio_secure": "s3_secure",
+}
 
 
 class Settings(BaseSettings):
@@ -82,16 +92,26 @@ class Settings(BaseSettings):
     qdrant_collection_prefix: str = "docusage"
 
     # ── Storage ──────────────────────────────────────────────────
-    storage_backend: Literal["minio", "s3"] = "minio"
-    minio_endpoint: str = "localhost:9000"
-    minio_access_key: str = "minioadmin"
-    minio_secret_key: str = "minioadmin"
-    minio_bucket: str = "docusage-docs"
-    minio_secure: bool = False
+    # s3_compatible: any server that speaks the S3 API (SeaweedFS in the
+    # compose files, MinIO, Garage, Cloudflare R2), reached at S3_ENDPOINT.
+    # s3: Amazon S3 itself, with the AWS_* credentials.
+    # "minio" is the old name for s3_compatible and still works.
+    storage_backend: Literal["s3_compatible", "s3", "minio"] = "s3_compatible"
+    s3_endpoint: str = "localhost:9000"  # host:port, no scheme
+    s3_access_key: str = "minioadmin"
+    s3_secret_key: str = "minioadmin"
+    s3_secure: bool = False  # True for https
+    s3_bucket: str = "docusage-docs"  # used by both backends
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     aws_region: str = "us-east-1"
-    s3_bucket: str = "docusage-docs"
+    # Deprecated MINIO_* names, read only when the S3_* name is unset.
+    # See DEPRECATED_STORAGE_NAMES.
+    minio_endpoint: str | None = None
+    minio_access_key: str | None = None
+    minio_secret_key: str | None = None
+    minio_bucket: str | None = None
+    minio_secure: bool | None = None
 
     # ── LLM ──────────────────────────────────────────────────────
     # Default is qwen2.5:7b-instruct (~4.7 GB Q4_K_M) — runs on CPU on a
@@ -113,6 +133,10 @@ class Settings(BaseSettings):
     # Retries for transient upstream errors and 429s (the SDK honours
     # Retry-After between attempts).
     llm_max_retries: int = Field(default=2, ge=0, le=10)
+    # reasoning_effort for reasoning models on the openai provider (gpt-oss
+    # on Groq, OpenAI o-series). Their reasoning tokens count toward rate
+    # limits, so "low" stretches a free tier. Empty: not sent.
+    llm_reasoning_effort: Literal["", "low", "medium", "high"] = ""
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-3-5-sonnet-20241022"
 
@@ -176,6 +200,11 @@ class Settings(BaseSettings):
     # rag_query. Kill switch for debugging — when false, every query
     # goes straight to the RAG path (pre-router behavior).
     enable_question_router: bool = True
+    # Whole-document summaries (map-reduce, several LLM calls each). When
+    # off, summary requests get a normal cited answer with a warning. The
+    # demo turns them off: one summary can exceed a free tier's per-minute
+    # token limit on its own.
+    doc_summary_enabled: bool = True
     # Heuristics (regex greeting / summary detection) always run first and
     # are instant. The "is this about the documents?" decision is then made
     # by the RETRIEVAL SCORE, not an LLM: non-heuristic queries go to RAG,
@@ -255,6 +284,9 @@ class Settings(BaseSettings):
     quota_max_documents: int = Field(default=0, ge=0)
     quota_max_upload_mb: int = Field(default=0, ge=0)
     quota_questions_per_day: int = Field(default=0, ge=0)
+    # Questions per UTC day across all users together, to stay inside a
+    # hosted LLM's daily token limit. 0 = off. Admins are exempt but count.
+    demo_global_questions_per_day: int = Field(default=0, ge=0)
 
     # /health/deep lists infrastructure details. By default only clients on
     # the same host (127.0.0.1) may call it, for example
@@ -293,6 +325,27 @@ class Settings(BaseSettings):
     smtp_user: str = ""
     smtp_password: str = ""
     emails_from: str = "noreply@example.com"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _read_deprecated_storage_names(cls, data: Any) -> Any:
+        """Fill each S3_* setting from its old MINIO_* name when only that is set."""
+        if isinstance(data, dict):
+            for old, new in DEPRECATED_STORAGE_NAMES.items():
+                if data.get(old) is not None and data.get(new) is None:
+                    data[new] = data[old]
+        return data
+
+    def deprecated_storage_settings(self) -> list[str]:
+        """Old storage setting names this configuration still uses."""
+        used = [
+            f"{old.upper()} (use {new.upper()})"
+            for old, new in DEPRECATED_STORAGE_NAMES.items()
+            if old in self.model_fields_set
+        ]
+        if self.storage_backend == "minio":
+            used.append("STORAGE_BACKEND=minio (use s3_compatible)")
+        return used
 
     @model_validator(mode="after")
     def validate_production_settings(self) -> "Settings":

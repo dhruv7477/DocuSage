@@ -31,6 +31,7 @@ from kombu import Queue
 from celery.signals import worker_process_init, worker_ready
 
 from src.configs.config import get_settings
+from src.core.deprecations import warn_deprecated_settings
 from src.core.logger import get_logger
 
 log = get_logger(__name__)
@@ -52,8 +53,16 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     # Reliability
-    task_acks_late=True,  # Re-queue if worker crashes mid-task
-    task_reject_on_worker_lost=True,  # Re-queue if worker process dies
+    # Ack after the task runs, so a message is not lost if the broker
+    # connection drops mid-task.
+    task_acks_late=True,
+    # When a pool process dies mid-task (out of memory, a crashing parser),
+    # ack and fail the task instead of redelivering it. A file that kills
+    # the worker would otherwise crash-loop ingestion for every user. The
+    # stale sweep marks the document FAILED and the user can re-upload it.
+    # If the whole worker goes down (VM restart), the unacked message is
+    # still redelivered by the broker.
+    task_reject_on_worker_lost=False,
     worker_prefetch_multiplier=1,  # One task at a time per worker (prevents OOM for large models)
     # Timeouts
     task_soft_time_limit=600,  # 10 min soft limit (sends SIGTERM)
@@ -119,6 +128,7 @@ def _prewarm_worker_models(**_kwargs) -> None:
 @worker_ready.connect
 def _sweep_stale_documents_on_start(**_kwargs) -> None:
     """Fail documents a previous worker left in flight (crash, kill, deploy)."""
+    warn_deprecated_settings(settings)
     try:
         from src.workers.tasks import fail_stale_documents_task
 
