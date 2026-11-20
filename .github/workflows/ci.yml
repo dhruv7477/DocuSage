@@ -52,7 +52,7 @@ jobs:
           docker run --rm -v "$PWD:/mnt" -w /mnt "$SHELLCHECK_IMAGE" \
             docker/scripts/entrypoint.sh docker/seaweedfs/start.sh \
             scripts/demo-env.sh deploy/setup-vm.sh deploy/backup-db.sh \
-            tests/e2e/start-stack.sh
+            deploy/ship-images.sh tests/e2e/start-stack.sh
 
       - name: No CRLF line endings committed
         run: |
