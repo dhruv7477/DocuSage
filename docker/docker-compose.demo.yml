@@ -52,7 +52,7 @@ x-app-env: &app-env
   LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-low}
   # A whole-document summary is several LLM calls (about 13K tokens for 40
   # chunks), more than Groq's free 8K tokens per minute on its own. Summary
-  # requests get a normal cited answer instead. See deploy/oracle/README.md
+  # requests get a normal cited answer instead. See deploy/README.md
   # to turn them back on with a paid tier.
   DOC_SUMMARY_ENABLED: ${DOC_SUMMARY_ENABLED:-false}
   SUMMARY_MAX_TOTAL_CHUNKS: ${SUMMARY_MAX_TOTAL_CHUNKS:-40}

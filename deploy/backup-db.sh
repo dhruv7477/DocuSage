@@ -2,13 +2,13 @@
 # Dump the demo's Postgres database and keep the last KEEP_DAYS days of dumps.
 # Installed as a nightly cron job by setup-vm.sh. Can also be run by hand.
 #
-# Usage: deploy/oracle/backup-db.sh
+# Usage: deploy/backup-db.sh
 # Options (environment): BACKUP_DIR=/var/backups/docusage  KEEP_DAYS=7
 # Restore:  docker compose -f docker/docker-compose.demo.yml exec -T postgres \
 #             pg_restore -U docusage -d docusage --clean --if-exists < FILE.dump
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/docusage}"
 KEEP_DAYS="${KEEP_DAYS:-7}"
 

@@ -4,7 +4,7 @@
 # in the host firewall, and installs the nightly database backup.
 # Safe to re-run: every step checks before it changes anything.
 #
-# Usage, from the cloned repo:  sudo deploy/oracle/setup-vm.sh
+# Usage, from the cloned repo:  sudo deploy/setup-vm.sh
 # Options (environment): SWAP_SIZE=4G  SWAP_FILE=/swapfile  BACKUP_DIR=/var/backups/docusage
 set -euo pipefail
 
@@ -13,7 +13,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
-REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SWAP_SIZE="${SWAP_SIZE:-4G}"
 SWAP_FILE="${SWAP_FILE:-/swapfile}"
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/docusage}"
@@ -105,9 +105,9 @@ install_backup() {
   mkdir -p "$BACKUP_DIR"
   chmod 700 "$BACKUP_DIR"
   cat > /etc/cron.d/docusage-backup <<CRON
-# Nightly Postgres dump of the DocuSage demo (see deploy/oracle/README.md).
+# Nightly Postgres dump of the DocuSage demo (see deploy/README.md).
 SHELL=/bin/bash
-30 2 * * * root BACKUP_DIR=$BACKUP_DIR $REPO_DIR/deploy/oracle/backup-db.sh >> /var/log/docusage-backup.log 2>&1
+30 2 * * * root BACKUP_DIR=$BACKUP_DIR $REPO_DIR/deploy/backup-db.sh >> /var/log/docusage-backup.log 2>&1
 CRON
   chmod 644 /etc/cron.d/docusage-backup
   echo "Installed /etc/cron.d/docusage-backup (02:30 every night, dumps to $BACKUP_DIR)."
@@ -119,4 +119,4 @@ open_firewall
 install_backup
 
 log "Done"
-echo "Next: configure and start the stack, see deploy/oracle/README.md."
+echo "Next: configure and start the stack, see deploy/README.md."

@@ -42,7 +42,7 @@ ssh ubuntu@<public-ip>
 sudo apt-get update && sudo apt-get install -y git
 git clone https://github.com/dhruv7477/DocuSage.git
 cd DocuSage
-sudo deploy/oracle/setup-vm.sh
+sudo deploy/setup-vm.sh
 ```
 
 `setup-vm.sh` installs Docker, adds a 4 GB swap file, opens ports 80 and 443 in the host firewall (Oracle's Ubuntu images reject everything except SSH by default), and installs a nightly database backup. It is safe to run again. Log out and back in afterwards, so your user can run `docker` without `sudo`.
@@ -85,7 +85,7 @@ Use any free external monitor, for example UptimeRobot, Better Stack or Healthch
 
 ## 8. Backups and restore
 
-The cron job from `setup-vm.sh` runs `deploy/oracle/backup-db.sh` at 02:30 UTC. It writes `/var/backups/docusage/docusage-<timestamp>.dump` and keeps 7 days of dumps. Its log is `/var/log/docusage-backup.log`.
+The cron job from `setup-vm.sh` runs `deploy/backup-db.sh` at 02:30 UTC. It writes `/var/backups/docusage/docusage-<timestamp>.dump` and keeps 7 days of dumps. Its log is `/var/log/docusage-backup.log`.
 
 The dump covers accounts, workspaces, chats and document records. Uploaded files and vectors are not backed up: the demo deletes every upload each night at 03:00 UTC (`DEMO_WIPE_HOUR_UTC`), and the sample documents are rebuilt from `demo/samples/` if they go missing. Copy dumps off the VM if you want to keep them.
 

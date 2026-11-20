@@ -45,7 +45,7 @@ To stop the stack, run `docker compose -f docker/docker-compose.demo.yml down`. 
 
 The demo stack is in demo mode: each account can keep 5 documents (25 MB in total) and ask 30 questions a day, every upload is deleted at 03:00 UTC, and new accounts get the sample documents. All of these are settings in `docker/.env` (see `docker/.env.demo.example`).
 
-To put the demo on a server with a real domain, follow [deploy/oracle/README.md](deploy/oracle/README.md). It covers an Oracle Cloud Always Free Ampere VM, but the steps work on any Ubuntu server with Docker.
+To put the demo on a server with a real domain, follow [deploy/README.md](deploy/README.md). It covers an Oracle Cloud Always Free Ampere VM, but the steps work on any Ubuntu server with Docker.
 
 ## Local development
 
@@ -122,7 +122,7 @@ src/                 Backend (Python) and frontend (TypeScript) share this folde
   demo/              Sample documents and nightly cleanup for demo mode
   components/, pages/, hooks/, store/, api/   React frontend
 docker/              Dockerfiles, compose files, Caddy and SeaweedFS config
-deploy/oracle/       VM setup, backups and deployment guide
+deploy/              VM setup, backups and deployment guide
 demo/samples/        Public-domain sample PDFs
 docs/                Case study and technical deep dive
 tests/               unit/, integration/, e2e/

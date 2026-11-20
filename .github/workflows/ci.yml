@@ -51,7 +51,7 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/mnt" -w /mnt "$SHELLCHECK_IMAGE" \
             docker/scripts/entrypoint.sh docker/seaweedfs/start.sh \
-            scripts/demo-env.sh deploy/oracle/setup-vm.sh deploy/oracle/backup-db.sh \
+            scripts/demo-env.sh deploy/setup-vm.sh deploy/backup-db.sh \
             tests/e2e/start-stack.sh
 
       - name: No CRLF line endings committed
@@ -337,7 +337,7 @@ jobs:
 
       - name: Database backup can be restored
         run: |
-          BACKUP_DIR="$RUNNER_TEMP/backups" deploy/oracle/backup-db.sh
+          BACKUP_DIR="$RUNNER_TEMP/backups" deploy/backup-db.sh
           dump=$(ls "$RUNNER_TEMP"/backups/docusage-*.dump)
           $COMPOSE exec -T postgres pg_restore --list < "$dump" | grep -q "TABLE DATA public users"
 
@@ -346,7 +346,7 @@ jobs:
         run: $COMPOSE logs --tail=200
 
   # ── VM setup script ─────────────────────────────────────────────
-  # deploy/oracle/setup-vm.sh on a fresh arm64 Ubuntu runner, twice, to show
+  # deploy/setup-vm.sh on a fresh arm64 Ubuntu runner, twice, to show
   # it works and that a second run changes nothing.
   vm-setup:
     name: VM setup script (arm64)
@@ -360,11 +360,11 @@ jobs:
       # the creation path.
       - name: First run
         run: |
-          sudo SWAP_SIZE=1G SWAP_FILE=/docusage-swapfile deploy/oracle/setup-vm.sh | tee first-run.log
+          sudo SWAP_SIZE=1G SWAP_FILE=/docusage-swapfile deploy/setup-vm.sh | tee first-run.log
           grep -q "Created a 1G swap file at /docusage-swapfile" first-run.log
       - name: Second run is a no-op
         run: |
-          sudo SWAP_SIZE=1G SWAP_FILE=/docusage-swapfile deploy/oracle/setup-vm.sh | tee second-run.log
+          sudo SWAP_SIZE=1G SWAP_FILE=/docusage-swapfile deploy/setup-vm.sh | tee second-run.log
           grep -q "/docusage-swapfile is already active" second-run.log
           grep -q "INPUT already accepts tcp/443" second-run.log
       - name: Result
