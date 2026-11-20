@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 
 from src.core.rate_limit import default_limit, limiter
 from src.dependencies import require_super_admin
-from src.db.session import get_db
+from src.db.session import DB_SESSION
 from src.models.user import User
 from src.services.admin_service import AdminService, AuditLogView, UserAdminView
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -105,7 +105,7 @@ class PaginatedAuditLogsResponse(BaseModel):
 
 
 def _admin_service(
-    db: AsyncSession = Depends(get_db, scope="function"),
+    db: AsyncSession = DB_SESSION,
 ) -> AdminService:
     return AdminService(db)
 

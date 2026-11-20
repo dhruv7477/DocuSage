@@ -42,7 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.core.exceptions import LLMProviderError
 from src.core.logger import get_logger
 from src.core.rate_limit import QUESTION_SCOPE, chat_limit, limiter, setting_limit
-from src.db.session import get_db
+from src.db.session import DB_SESSION, get_db
 from src.dependencies import get_current_user
 from src.models.user import User
 from src.providers.embedding.factory import get_embedding_provider
@@ -73,7 +73,7 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 
 
 def _get_chat_service(
-    db: AsyncSession = Depends(get_db, scope="function"),
+    db: AsyncSession = DB_SESSION,
 ) -> ChatService:
     return ChatService(db)
 
@@ -280,7 +280,7 @@ async def query(
     chat_id: uuid.UUID,
     payload: ChatQueryRequest,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db, scope="function"),
+    db: AsyncSession = DB_SESSION,
     rag_service: RAGService = Depends(_get_rag_service),
 ) -> QueryResponse:
     """

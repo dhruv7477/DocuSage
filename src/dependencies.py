@@ -27,7 +27,7 @@ from src.core.exceptions import (
 )
 from src.core.security import decode_token, extract_user_id
 from src.core.token_blacklist import is_token_blacklisted
-from src.db.session import get_db
+from src.db.session import DB_SESSION
 from src.models.user import User, UserRole
 
 # Extracts "Authorization: Bearer <token>" header
@@ -39,7 +39,7 @@ _settings = get_settings()
 async def get_current_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(_bearer),
-    db: AsyncSession = Depends(get_db, scope="function"),
+    db: AsyncSession = DB_SESSION,
 ) -> User:
     """
     Core auth dependency.
@@ -99,7 +99,7 @@ async def require_super_admin(
     return user
 
 
-def get_auth_service(db: AsyncSession = Depends(get_db, scope="function")):
+def get_auth_service(db: AsyncSession = DB_SESSION):
     """Dependency factory for AuthService."""
     from src.services.auth_service import AuthService
 

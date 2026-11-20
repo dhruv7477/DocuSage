@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.logger import get_logger
 from src.core.rate_limit import limiter, setting_limit
-from src.db.session import get_db
+from src.db.session import DB_SESSION
 from src.dependencies import get_current_user
 from src.models.document import DocumentStatus, DocumentType
 from src.models.user import User
@@ -44,7 +44,7 @@ router = APIRouter(prefix="/documents", tags=["Documents"])
 
 
 def _get_service(
-    db: AsyncSession = Depends(get_db, scope="function"),
+    db: AsyncSession = DB_SESSION,
 ) -> DocumentService:
     return DocumentService(db, StorageService(), QuotaService(db))
 
