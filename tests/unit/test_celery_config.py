@@ -65,3 +65,9 @@ def test_lost_worker_fails_the_task_instead_of_redelivering(monkeypatch) -> None
     on_reject.assert_not_called()
     backend.mark_as_failure.assert_called_once()
     assert isinstance(backend.mark_as_failure.call_args.args[1], WorkerLostError)
+
+
+def test_a_new_pool_process_has_time_to_load_the_embedder() -> None:
+    # Each new pool process imports torch and loads the embedder before it
+    # reports up. Celery's 4 s default killed every replacement in a loop.
+    assert celery_app.conf.worker_proc_alive_timeout >= 60

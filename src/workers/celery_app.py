@@ -64,6 +64,11 @@ celery_app.conf.update(
     # still redelivered by the broker.
     task_reject_on_worker_lost=False,
     worker_prefetch_multiplier=1,  # One task at a time per worker (prevents OOM for large models)
+    # A new pool process imports torch and loads the embedder before it
+    # reports up (worker_process_init below), which takes several seconds
+    # on a small CPU. Celery's default of 4 s killed every replacement
+    # process (after a crash, or --max-tasks-per-child) in a loop.
+    worker_proc_alive_timeout=120,
     # Timeouts
     task_soft_time_limit=600,  # 10 min soft limit (sends SIGTERM)
     task_time_limit=660,  # 11 min hard limit (sends SIGKILL)
