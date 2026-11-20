@@ -207,10 +207,11 @@ jobs:
           $COMPOSE cp caddy:/data/caddy/pki/authorities/local/root.crt "$ca"
           cp tests/security/zap/rules.tsv "$ZAP_WRK/"
           # The OpenAPI schema comes from the running app; the app itself
-          # serves no /docs or /openapi.json in production.
+          # serves no /docs or /openapi.json in production. The image holds
+          # only the app, so the export script is piped in on stdin.
           $COMPOSE exec -T -e PYTHONPATH=/src api \
-            python scripts/security/export_openapi.py --server https://localhost - \
-            > "$ZAP_WRK/openapi.json"
+            python - --server https://localhost - \
+            < scripts/security/export_openapi.py > "$ZAP_WRK/openapi.json"
           # A throwaway account, so the API scan runs signed in.
           email="zap-$(date +%s)@example.com"
           password="Zap-$(openssl rand -hex 12)-Aa1"

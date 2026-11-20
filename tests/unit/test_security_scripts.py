@@ -144,6 +144,30 @@ def test_openapi_export_targets_the_scan_server_without_logout() -> None:
     assert "/api/v1/auth/login" in schema["paths"]
 
 
+def test_openapi_export_writes_a_file(tmp_path: Path, capsys) -> None:
+    out = tmp_path / "openapi.json"
+
+    assert export_openapi.main(["--server", "https://localhost", str(out)]) == 0
+
+    schema = json.loads(out.read_text(encoding="utf-8"))
+    assert schema["servers"] == [{"url": "https://localhost"}]
+    assert f"{len(schema['paths'])} paths exported" in capsys.readouterr().err
+
+
+def test_openapi_export_writes_stdout_for_a_dash(capsys) -> None:
+    # The DAST job pipes the script into the API container and reads stdout.
+    assert export_openapi.main(["--server", "https://localhost", "-"]) == 0
+
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["servers"] == [{"url": "https://localhost"}]
+    assert "paths exported" in captured.err
+
+
+def test_openapi_export_needs_a_server() -> None:
+    with pytest.raises(SystemExit):
+        export_openapi.main(["-"])
+
+
 def test_production_serves_no_api_docs(monkeypatch: pytest.MonkeyPatch) -> None:
     from src import main
 

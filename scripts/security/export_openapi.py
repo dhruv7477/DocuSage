@@ -9,8 +9,9 @@ would end the scan's session (logout) are left out.
 
     python scripts/security/export_openapi.py --server https://localhost openapi.json
 
-An output of "-" writes the schema to stdout. CI runs it inside the API
-container (PYTHONPATH=/src), which already has the app and its dependencies.
+An output of "-" writes the schema to stdout. CI pipes this file into the
+API container (`python - ...`, PYTHONPATH=/src): the image has the app and
+its dependencies but not this script.
 """
 
 from __future__ import annotations
