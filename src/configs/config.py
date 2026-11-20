@@ -148,7 +148,10 @@ class Settings(BaseSettings):
     embedding_provider: Literal["bge", "ollama", "openai", "cohere"] = "bge"
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     embedding_device: Literal["cpu", "cuda", "mps"] = "cpu"
-    embedding_batch_size: int = 32
+    # Texts per forward pass. Memory grows with it: for 512-token texts,
+    # about 480 MB extra at 32 and 200 MB at 8 (8 is about 10% slower on
+    # CPU). The demo compose uses 8 to fit a 2 GB server.
+    embedding_batch_size: int = Field(default=32, ge=1)
     embedding_dimension: int = 384
     ollama_embed_model: str = "nomic-embed-text"
     openai_embed_model: str = "text-embedding-3-large"
@@ -179,6 +182,10 @@ class Settings(BaseSettings):
     # multilingual quality if you have a GPU; on CPU it scores 22 s/batch
     # and makes every query feel frozen.
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    # (query, passage) pairs scored per forward pass. For 512-token pairs,
+    # about 400 MB extra at 32 and 160 MB at 8, at the same speed on CPU.
+    # The demo compose uses 8.
+    reranker_batch_size: int = Field(default=32, ge=1)
     # Candidates fetched per retrieval branch before fusion+reranking.
     # Kept at 20 for CPU — the reranker is O(n) so fewer candidates = faster.
     retrieval_candidate_k: int = 20
