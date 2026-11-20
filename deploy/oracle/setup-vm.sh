@@ -8,7 +8,7 @@
 # Options (environment): SWAP_SIZE=4G  SWAP_FILE=/swapfile  BACKUP_DIR=/var/backups/docusage
 set -euo pipefail
 
-if [ "$(id -u)" -ne 0 ]; then
+if [[ "$(id -u)" -ne 0 ]]; then
   echo "Run with sudo." >&2
   exit 1
 fi
@@ -40,7 +40,7 @@ install_docker() {
   apt-get update
   apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   systemctl enable --now docker
-  if [ -n "${SUDO_USER:-}" ]; then
+  if [[ -n "${SUDO_USER:-}" ]]; then
     usermod -aG docker "$SUDO_USER"
     echo "Added $SUDO_USER to the docker group. Log out and back in to use docker without sudo."
   fi
@@ -76,14 +76,14 @@ open_port() {
   else
     local reject_line
     reject_line="$(iptables -L INPUT --line-numbers -n | awk '$2 == "REJECT" {print $1; exit}')"
-    if [ -n "$reject_line" ]; then
+    if [[ -n "$reject_line" ]]; then
       iptables -I INPUT "$reject_line" "${spec[@]}"
     else
       iptables -A INPUT "${spec[@]}"
     fi
     echo "Opened $proto/$port."
   fi
-  if [ -f "$IPTABLES_RULES" ]; then
+  if [[ -f "$IPTABLES_RULES" ]]; then
     local saved="-A INPUT -p $proto -m state --state NEW -m $proto --dport $port -j ACCEPT"
     if ! grep -qxF -- "$saved" "$IPTABLES_RULES"; then
       awk -v add="$saved" '!done && /^-A INPUT -j REJECT/ {print add; done = 1} {print}' \
