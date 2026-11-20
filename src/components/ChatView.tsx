@@ -96,13 +96,15 @@ function WarningBanner({ warning }: { warning: StreamWarning }) {
 // Citations live in the "Check sources" carousel, not inline. Strip the
 // [n] markers from the answer text (and tidy the spacing/punctuation they
 // leave behind). The trailing-partial rule keeps a half-streamed "[1"
-// from flickering while tokens arrive.
-function stripCitations(content: string): string {
+// from flickering while tokens arrive. The last rule only starts at the
+// beginning of a whitespace run, so a long run that is not followed by
+// punctuation is scanned once, not once per character.
+export function stripCitations(content: string): string {
   return content
     .replace(/\[\d+\]/g, '')
     .replace(/\[\d*$/, '')
     .replace(/[ \t]{2,}/g, ' ')
-    .replace(/\s+([.,;:!?])/g, '$1')
+    .replace(/(?<!\s)\s+([.,;:!?])/g, '$1')
 }
 
 // ── Inline page-screenshot preview (issue #1: prominent, always-visible) ──
@@ -423,7 +425,7 @@ export function ChatView() {
     setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 80)
   }
 
-  const sendMessage = async (q = input.trim()) => {
+  const sendMessage = (q = input.trim()) => {
     // '__optimistic__' is the placeholder id while chat creation is in
     // flight — block sends until the real id arrives.
     if (!q || !activeChatId || activeChatId === '__optimistic__' || sse.streaming || !hasReadyDoc) return

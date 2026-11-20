@@ -132,7 +132,7 @@ export function LoginPage() {
         {/* Header */}
         <div className="mb-8">
           <p className="font-mono text-xs text-teal mb-2 tracking-widest uppercase">
-            // AUTHENTICATE
+            {'// AUTHENTICATE'}
           </p>
           <h1 className="font-hud text-3xl font-bold text-bright leading-tight tracking-wide glow-text">
             Welcome back
@@ -224,7 +224,7 @@ export function RegisterPage() {
       <div className="animate-fade-up">
         <div className="mb-8">
           <p className="font-mono text-xs text-teal mb-2 tracking-widest uppercase">
-            // NEW_INSTANCE
+            {'// NEW_INSTANCE'}
           </p>
           <h1 className="font-hud text-3xl font-bold text-bright tracking-wide glow-text">
             Create account

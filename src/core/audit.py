@@ -24,6 +24,7 @@ Usage (explicit logging from a service/route):
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from typing import Callable
@@ -37,6 +38,11 @@ from src.core.logger import get_logger
 from src.models.audit_log import AuditLog
 
 log = get_logger(__name__)
+
+# The event loop keeps only weak references to tasks, so a fire-and-forget
+# audit write needs a strong one until it finishes, or it can be garbage
+# collected half done.
+_pending_writes: set[asyncio.Task[None]] = set()
 
 # ── Paths that are always skipped (health, docs, metrics) ─────────
 _SKIP_PATHS = frozenset(
@@ -149,9 +155,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
         response.headers["X-Request-ID"] = request_id
 
         # Fire-and-forget audit write (don't await — no latency impact)
-        import asyncio
-
-        asyncio.create_task(
+        task = asyncio.create_task(
             _write_audit_log(
                 request=request,
                 status_code=response.status_code,
@@ -160,6 +164,8 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 duration_ms=duration_ms,
             )
         )
+        _pending_writes.add(task)
+        task.add_done_callback(_pending_writes.discard)
 
         return response
 
