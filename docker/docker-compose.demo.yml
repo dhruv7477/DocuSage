@@ -50,14 +50,22 @@ x-app-env: &app-env
   LLM_MAX_RETRIES: "4"
   LLM_TIMEOUT_SECONDS: "120"
   LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-low}
+  # Tokens per reply, reasoning included for gpt-oss. If answers come back
+  # empty, the reasoning used them all: raise this (deploy/README.md).
+  LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-2048}
   # A whole-document summary is several LLM calls (about 13K tokens for 40
   # chunks), more than Groq's free 8K tokens per minute on its own. Summary
-  # requests get a normal cited answer instead. See deploy/oracle/README.md
+  # requests get a normal cited answer instead. See deploy/README.md
   # to turn them back on with a paid tier.
   DOC_SUMMARY_ENABLED: ${DOC_SUMMARY_ENABLED:-false}
   SUMMARY_MAX_TOTAL_CHUNKS: ${SUMMARY_MAX_TOTAL_CHUNKS:-40}
   EMBEDDING_PROVIDER: bge
   EMBEDDING_DEVICE: cpu
+  # Smaller batches for the embedder (worker) and the reranker (API): for
+  # 512-token texts a batch of 32 needs about 400 to 480 MB on top of the
+  # model, a batch of 8 about 160 to 200 MB, at nearly the same speed.
+  EMBEDDING_BATCH_SIZE: "8"
+  RERANKER_BATCH_SIZE: "8"
   LOG_LEVEL: INFO
   # Abuse controls for a public URL (see DECISIONS_PENDING.md, D7). Rate-limit
   # counters live in Redis db 3 so restarts and every process share them.
@@ -75,6 +83,10 @@ x-app-env: &app-env
   # DEMO_WIPE_HOUR_UTC, and the notice on the sign-up page.
   DEMO_MODE: "true"
   DEMO_WIPE_HOUR_UTC: ${DEMO_WIPE_HOUR_UTC:-3}
+  # glibc gives each thread its own malloc arena by default (up to 8 per
+  # CPU), and torch and the tokenizers start many threads. Two arenas keep
+  # the heap from fragmenting across them.
+  MALLOC_ARENA_MAX: "2"
 
 x-app: &app
   build:
@@ -97,6 +109,11 @@ services:
     logging: *logging
     environment:
       DEMO_DOMAIN: ${DEMO_DOMAIN:?run scripts/demo-env.sh first}
+      # Caddy's global "email" option, or nothing when ACME_EMAIL is empty.
+      ACME_EMAIL_OPTION: ${ACME_EMAIL:+email ${ACME_EMAIL}}
+      GOMEMLIMIT: 28MiB
+    mem_limit: &caddy-mem 40m
+    memswap_limit: *caddy-mem
     ports:
       - "80:80"
       - "443:443"
@@ -113,7 +130,12 @@ services:
       <<: *app-env
       # Only Caddy can reach the API, so trust its X-Forwarded-For header.
       FORWARDED_ALLOW_IPS: "*"
-    mem_limit: 2g
+      WEB_CONCURRENCY: "1"
+    # torch, the embedder and the reranker. Up to 512 MB more may go to swap:
+    # about 150 MB is libraries sentence-transformers imports and never uses
+    # again (scikit-learn, SciPy, SymPy), the right thing to page out.
+    mem_limit: 600m
+    memswap_limit: 1112m
     depends_on:
       postgres:
         condition: service_healthy
@@ -134,12 +156,16 @@ services:
   worker:
     <<: *app
     # -B runs Celery beat inside this single worker (stale-document sweep).
-    command: celery -A src.workers.celery_app worker -B --concurrency=1 --loglevel=info
+    # One pool process, replaced after 10 tasks: parsing and embedding leave
+    # memory behind that Python does not hand back.
+    command: celery -A src.workers.celery_app worker -B --concurrency=1 --max-tasks-per-child=10 --loglevel=info
     environment:
       <<: *app-env
       SKIP_MIGRATIONS: "true"
-    # A pathological upload should take down the worker, not the VM.
-    mem_limit: 3g
+    # A pathological upload should take down the worker, not the VM. Swap as
+    # for the API.
+    mem_limit: 600m
+    memswap_limit: 1112m
     # The image's HTTP healthcheck is for the API. The worker answers a ping
     # through the broker instead (about 1.5 s of CPU per check).
     healthcheck:
@@ -162,6 +188,26 @@ services:
       POSTGRES_DB: docusage
       POSTGRES_USER: docusage
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run scripts/demo-env.sh first}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=24MB
+      - -c
+      - effective_cache_size=64MB
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=16MB
+      - -c
+      - max_connections=50
+      - -c
+      - jit=off
+      - -c
+      - max_parallel_workers_per_gather=0
+      - -c
+      - autovacuum_max_workers=2
+    mem_limit: &postgres-mem 96m
+    memswap_limit: *postgres-mem
     volumes:
       - pg-data:/var/lib/postgresql/data
     healthcheck:
@@ -176,7 +222,9 @@ services:
     logging: *logging
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?run scripts/demo-env.sh first}
-    command: ["sh", "-c", 'exec redis-server --requirepass "$$REDIS_PASSWORD" --save 60 1 --loglevel warning']
+    command: ["sh", "-c", 'exec redis-server --requirepass "$$REDIS_PASSWORD" --save 60 1 --maxmemory 16mb --maxmemory-policy noeviction --loglevel warning']
+    mem_limit: &redis-mem 32m
+    memswap_limit: *redis-mem
     volumes:
       - redis-data:/data
     healthcheck:
@@ -192,6 +240,16 @@ services:
     environment:
       QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?run scripts/demo-env.sh first}
       QDRANT__TELEMETRY_DISABLED: "true"
+      # Every workspace is its own collection, and every demo account gets
+      # one (the sample documents). Defaults for new collections: a 1 MB
+      # write-ahead log and one segment, about 3 MB per small collection
+      # instead of 11 MB.
+      QDRANT__STORAGE__WAL__WAL_CAPACITY_MB: "1"
+      QDRANT__STORAGE__OPTIMIZERS__DEFAULT_SEGMENT_NUMBER: "1"
+    # Grows with accounts (about 3 MB each) and documents. Collections nobody
+    # is searching can go to swap (deploy/README.md, Memory).
+    mem_limit: 128m
+    memswap_limit: 640m
     volumes:
       - qdrant-data:/qdrant/storage
 
@@ -202,6 +260,9 @@ services:
     environment:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:?run scripts/demo-env.sh first}
       S3_SECRET_KEY: ${S3_SECRET_KEY:?run scripts/demo-env.sh first}
+      GOMEMLIMIT: 48MiB
+    mem_limit: &seaweedfs-mem 64m
+    memswap_limit: *seaweedfs-mem
     entrypoint: ["/bin/sh", "/start.sh"]
     volumes:
       - seaweedfs-data:/data

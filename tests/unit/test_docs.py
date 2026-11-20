@@ -19,7 +19,7 @@ DOCS = sorted(
         *ROOT.glob("docs/*.html"),
         ROOT / "README.md",
         ROOT / "SECURITY.md",
-        ROOT / "deploy" / "oracle" / "README.md",
+        ROOT / "deploy" / "README.md",
     ]
 )
 # `src/...` inside backticks or <code>, up to a "*" glob or a ":symbol" suffix.

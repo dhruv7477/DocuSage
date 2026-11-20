@@ -7,6 +7,9 @@
 # URL, and the demo does not keep visitors' questions.
 
 {
+	# "email <address>" when ACME_EMAIL is set in docker/.env, else empty:
+	# the address Let's Encrypt (and the ZeroSSL fallback) can reach you at.
+	{$ACME_EMAIL_OPTION}
 	# Clients that send no server name (Java, and so ZAP, for "localhost")
 	# still get this site's certificate.
 	default_sni {$DEMO_DOMAIN:demo.example.com}

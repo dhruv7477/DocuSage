@@ -111,3 +111,77 @@ class TestHTMLParser:
         doc = await parser.parse(content, "page.html")
         assert "alert" not in doc.full_text
         assert "Clean content" in doc.full_text
+
+
+# ── PDF tables (pdfplumber) ───────────────────────────────────────
+
+
+class _FakeTable:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def extract(self):
+        return self._rows
+
+
+class _FakePage:
+    def __init__(self, tables=None, fail=False):
+        self._tables = tables or []
+        self._fail = fail
+        self.closed = False
+
+    def find_tables(self):
+        if self._fail:
+            raise RuntimeError("broken page")
+        return self._tables
+
+    def close(self):
+        self.closed = True
+
+
+class _FakePdf:
+    def __init__(self, pages):
+        self.pages = pages
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _fake_pdfplumber(monkeypatch, pages):
+    import sys
+    import types
+
+    module = types.SimpleNamespace(open=lambda _stream: _FakePdf(pages))
+    monkeypatch.setitem(sys.modules, "pdfplumber", module)
+
+
+class TestPdfTables:
+    def test_each_page_is_closed_after_its_tables_are_read(self, monkeypatch):
+        from src.ingestion.parsers.pdf_parser import PDFParser
+
+        pages = [
+            _FakePage([_FakeTable([["Function", "Category"], ["Govern", "GV.OC"]])]),
+            _FakePage(),
+            _FakePage([_FakeTable([])]),
+        ]
+        _fake_pdfplumber(monkeypatch, pages)
+
+        out = PDFParser._extract_tables_markdown(b"%PDF")
+
+        assert list(out) == [1]
+        assert "| Function | Category |" in out[1][0]
+        assert "Govern" in out[1][0]
+        assert all(page.closed for page in pages)
+
+    def test_a_page_is_closed_even_when_reading_it_fails(self, monkeypatch):
+        from src.ingestion.parsers.pdf_parser import PDFParser
+
+        pages = [_FakePage(fail=True)]
+        _fake_pdfplumber(monkeypatch, pages)
+
+        with pytest.raises(RuntimeError):
+            PDFParser._extract_tables_markdown(b"%PDF")
+        assert pages[0].closed

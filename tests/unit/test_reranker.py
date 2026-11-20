@@ -153,3 +153,32 @@ class TestGetReranker:
         mock_llm = MagicMock()
         r = get_reranker("llm", llm=mock_llm)
         assert isinstance(r, LLMReranker)
+
+
+class TestCrossEncoderBatchSize:
+    def _scored(self, monkeypatch, reranker) -> MagicMock:
+        from src.retrieval.reranker import CrossEncoderReranker
+
+        model = MagicMock()
+        model.predict.return_value = [2.0, -1.0, 0.5]
+        monkeypatch.setattr(CrossEncoderReranker, "_load_model", lambda *_: model)
+        results = [_make_result(f"c{i}", 0.5) for i in range(3)]
+        ranked = reranker._rerank_sync("q", results, top_k=2)
+        assert [r.chunk_id for r in ranked] == ["c0", "c2"]
+        return model
+
+    def test_uses_the_configured_batch_size(self, monkeypatch):
+        from src.configs.config import get_settings
+        from src.retrieval.reranker import CrossEncoderReranker
+
+        monkeypatch.setattr(get_settings(), "reranker_batch_size", 8)
+        model = self._scored(monkeypatch, CrossEncoderReranker(model_name="m"))
+        assert model.predict.call_args.kwargs["batch_size"] == 8
+
+    def test_an_explicit_batch_size_wins(self, monkeypatch):
+        from src.retrieval.reranker import CrossEncoderReranker
+
+        model = self._scored(
+            monkeypatch, CrossEncoderReranker(model_name="m", batch_size=4)
+        )
+        assert model.predict.call_args.kwargs["batch_size"] == 4

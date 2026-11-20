@@ -2,11 +2,11 @@
 # Write docker/.env for docker/docker-compose.demo.yml.
 #
 # Starts from docker/.env.demo.example, fills every empty secret with a fresh
-# random value, and takes DEMO_DOMAIN and GROQ_API_KEY from the environment
-# when they are set. Never prints secret values.
+# random value, and takes DEMO_DOMAIN, GROQ_API_KEY and ACME_EMAIL from the
+# environment when they are set. Never prints secret values.
 #
 # Usage, from the repo root:
-#   DEMO_DOMAIN=demo.example.com GROQ_API_KEY=gsk_... scripts/demo-env.sh
+#   DEMO_DOMAIN=demo.example.com GROQ_API_KEY=gsk_... ACME_EMAIL=you@example.com scripts/demo-env.sh
 #   scripts/demo-env.sh --force    # overwrite an existing docker/.env
 set -eu
 
@@ -34,6 +34,8 @@ while IFS= read -r line || [ -n "$line" ]; do
       [ -n "${DEMO_DOMAIN:-}" ] && line="DEMO_DOMAIN=$DEMO_DOMAIN" ;;
     GROQ_API_KEY=*)
       [ -n "${GROQ_API_KEY:-}" ] && line="GROQ_API_KEY=$GROQ_API_KEY" ;;
+    ACME_EMAIL=*)
+      [ -n "${ACME_EMAIL:-}" ] && line="ACME_EMAIL=$ACME_EMAIL" ;;
     SECRET_KEY= | POSTGRES_PASSWORD= | REDIS_PASSWORD= | QDRANT_API_KEY= | S3_ACCESS_KEY= | S3_SECRET_KEY=)
       line="$line$(random_secret)" ;;
   esac
