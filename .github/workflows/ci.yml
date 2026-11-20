@@ -363,8 +363,11 @@ jobs:
         run: $COMPOSE logs --tail=200
 
   # ── VM setup script ─────────────────────────────────────────────
-  # deploy/setup-vm.sh on a fresh arm64 Ubuntu runner, twice, to show
-  # it works and that a second run changes nothing.
+  # deploy/setup-vm.sh on a fresh arm64 Ubuntu runner. The runner's host
+  # firewall rejects nothing, like AWS's Ubuntu image: two runs, the second
+  # a no-op. Then an Oracle-style REJECT rule (on an unused port, so the
+  # runner keeps its own connections) and two more runs: 80 and 443 are
+  # opened once, before the REJECT rule, and the last run changes nothing.
   vm-setup:
     name: VM setup script (arm64)
     runs-on: ubuntu-24.04-arm
@@ -374,19 +377,33 @@ jobs:
         with:
           persist-credentials: false
       # The runner already has /swapfile, so use a separate file to exercise
-      # the creation path.
-      - name: First run
+      # the creation path, at the default size.
+      - name: First run (no host firewall rules, as on AWS)
         run: |
-          sudo SWAP_SIZE=1G SWAP_FILE=/docusage-swapfile deploy/setup-vm.sh | tee first-run.log
-          grep -q "Created a 1G swap file at /docusage-swapfile" first-run.log
+          sudo SWAP_FILE=/docusage-swapfile deploy/setup-vm.sh | tee first-run.log
+          grep -q "Created a 4G swap file at /docusage-swapfile" first-run.log
+          grep -q "The host firewall rejects nothing" first-run.log
       - name: Second run is a no-op
         run: |
-          sudo SWAP_SIZE=1G SWAP_FILE=/docusage-swapfile deploy/setup-vm.sh | tee second-run.log
+          sudo SWAP_FILE=/docusage-swapfile deploy/setup-vm.sh | tee second-run.log
           grep -q "/docusage-swapfile is already active" second-run.log
-          grep -q "INPUT already accepts tcp/443" second-run.log
+          if sudo iptables -S INPUT | grep -q -- "--dport 443"; then
+            echo "opened a port the host firewall did not block"; exit 1
+          fi
+      - name: Host firewall that rejects (as on Oracle) is opened once
+        run: |
+          sudo iptables -A INPUT -p tcp --dport 9 -j REJECT
+          sudo SWAP_FILE=/docusage-swapfile deploy/setup-vm.sh | tee third-run.log
+          grep -q "Opened tcp/443" third-run.log
+          sudo SWAP_FILE=/docusage-swapfile deploy/setup-vm.sh | tee fourth-run.log
+          grep -q "INPUT already accepts tcp/443" fourth-run.log
+          sudo iptables -L INPUT --line-numbers -n | awk '
+            /ACCEPT .*dpt:443/ && !accept { accept = $1 }
+            /REJECT/ && !reject { reject = $1 }
+            END { if (!accept || !reject || accept > reject) { print "ACCEPT 443 is not before REJECT"; exit 1 } }'
       - name: Result
         run: |
-          swapon --show | grep -q /docusage-swapfile
-          grep -q "^/docusage-swapfile none swap" /etc/fstab
-          sudo iptables -C INPUT -p tcp -m state --state NEW -m tcp --dport 443 -j ACCEPT
-          test -f /etc/cron.d/docusage-backup
+          test "$(swapon --show=NAME,SIZE --noheadings | awk '$1 == "/docusage-swapfile" {print $2}')" = 4G
+          test "$(grep -c '^/docusage-swapfile none swap' /etc/fstab)" = 1
+          test "$(sudo iptables -S INPUT | grep -c -- '--dport 443 .*-j ACCEPT')" = 2  # tcp and udp
+          grep -q "deploy/backup-db.sh" /etc/cron.d/docusage-backup
