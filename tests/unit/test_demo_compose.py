@@ -18,6 +18,7 @@ pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "docker" / "docker-compose.demo.yml"
 ENV_EXAMPLE = ROOT / "docker" / ".env.demo.example"
+CADDYFILE = ROOT / "docker" / "caddy" / "Caddyfile"
 
 # Read by uvicorn, glibc and the image entrypoint, not by Settings.
 NOT_SETTINGS = {
@@ -42,6 +43,14 @@ def _default(value: str) -> str:
     return match.group(1)
 
 
+def _example_env() -> dict[str, str]:
+    return dict(
+        line.split("=", 1)
+        for line in ENV_EXAMPLE.read_text(encoding="utf-8").splitlines()
+        if "=" in line and not line.startswith("#")
+    )
+
+
 def test_every_app_variable_is_a_setting() -> None:
     unknown = {
         name
@@ -61,6 +70,7 @@ def test_every_app_variable_is_a_setting() -> None:
         ("LLM_REASONING_EFFORT", "low"),
         ("QUOTA_MAX_DOCUMENTS", "5"),
         ("QUOTA_MAX_UPLOAD_MB", "25"),
+        ("LLM_MAX_TOKENS", "2048"),
     ],
 )
 def test_free_tier_defaults_can_be_overridden(name: str, expected: str) -> None:
@@ -70,11 +80,24 @@ def test_free_tier_defaults_can_be_overridden(name: str, expected: str) -> None:
 
 
 def test_example_env_names_current_models() -> None:
-    values = dict(
-        line.split("=", 1)
-        for line in ENV_EXAMPLE.read_text(encoding="utf-8").splitlines()
-        if "=" in line and not line.startswith("#")
-    )
+    values = _example_env()
     models = {values["LLM_MODEL"], values["ROUTER_MODEL"], values["SUMMARY_MODEL"]}
     assert all(models)
     assert not models & RETIRED_GROQ_MODELS
+
+
+def test_the_certificate_email_is_optional() -> None:
+    caddy = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]["caddy"]
+    # Compose passes "email <address>", or an empty string when unset...
+    assert caddy["environment"]["ACME_EMAIL_OPTION"] == (
+        "${ACME_EMAIL:+email ${ACME_EMAIL}}"
+    )
+    # ...and the Caddyfile's global block expands it in place.
+    global_block = CADDYFILE.read_text(encoding="utf-8").split("\n}\n", 1)[0]
+    assert "{$ACME_EMAIL_OPTION}" in global_block
+
+
+def test_example_env_has_no_real_email_or_key() -> None:
+    values = _example_env()
+    assert values["ACME_EMAIL"] == ""
+    assert values["GROQ_API_KEY"] == ""
