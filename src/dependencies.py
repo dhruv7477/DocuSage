@@ -39,7 +39,7 @@ _settings = get_settings()
 async def get_current_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(_bearer),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> User:
     """
     Core auth dependency.
@@ -99,7 +99,7 @@ async def require_super_admin(
     return user
 
 
-def get_auth_service(db: AsyncSession = Depends(get_db)):
+def get_auth_service(db: AsyncSession = Depends(get_db, scope="function")):
     """Dependency factory for AuthService."""
     from src.services.auth_service import AuthService
 

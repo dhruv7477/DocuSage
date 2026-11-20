@@ -28,7 +28,9 @@ from src.vector_store.factory import get_vector_store
 router = APIRouter(prefix="/workspaces", tags=["Workspaces"])
 
 
-def _get_service(db: AsyncSession = Depends(get_db)) -> WorkspaceService:
+def _get_service(
+    db: AsyncSession = Depends(get_db, scope="function"),
+) -> WorkspaceService:
     return WorkspaceService(db, vector_store=get_vector_store())
 
 

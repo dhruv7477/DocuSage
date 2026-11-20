@@ -72,7 +72,9 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 # ── Dependency factories ──────────────────────────────────────────
 
 
-def _get_chat_service(db: AsyncSession = Depends(get_db)) -> ChatService:
+def _get_chat_service(
+    db: AsyncSession = Depends(get_db, scope="function"),
+) -> ChatService:
     return ChatService(db)
 
 
@@ -278,7 +280,7 @@ async def query(
     chat_id: uuid.UUID,
     payload: ChatQueryRequest,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
     rag_service: RAGService = Depends(_get_rag_service),
 ) -> QueryResponse:
     """
@@ -377,6 +379,8 @@ async def stream_query(
         default=None, description="Comma-separated document IDs to scope search"
     ),
     current_user: User = Depends(get_current_user),
+    # Request scope (the default): this session stays open while the answer
+    # streams, and the generator below saves the messages with it.
     db: AsyncSession = Depends(get_db),
     orchestrator: ChatOrchestrator = Depends(_get_orchestrator),
 ) -> StreamingResponse:

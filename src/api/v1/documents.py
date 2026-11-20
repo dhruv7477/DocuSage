@@ -43,7 +43,9 @@ log = get_logger(__name__)
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
 
-def _get_service(db: AsyncSession = Depends(get_db)) -> DocumentService:
+def _get_service(
+    db: AsyncSession = Depends(get_db, scope="function"),
+) -> DocumentService:
     return DocumentService(db, StorageService(), QuotaService(db))
 
 

@@ -54,10 +54,17 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     Yields an AsyncSession scoped to a single HTTP request.
 
     Usage in route:
-        async def my_route(db: AsyncSession = Depends(get_db)): ...
+        async def my_route(db: AsyncSession = Depends(get_db, scope="function")): ...
 
     Commits on clean exit, rolls back on any exception.
     This prevents partial writes from leaking into the DB.
+
+    Use scope="function". FastAPI runs the code after `yield` (the commit)
+    when the endpoint returns with that scope, but only after the response
+    has been sent with the default "request" scope. A client's next request
+    (create a chat, then stream into it) can then arrive before the commit
+    and not find the row. Only the streaming chat endpoint keeps the request
+    scope, because its session must stay open while the answer streams.
     """
     async with AsyncSessionLocal() as session:
         try:

@@ -52,7 +52,7 @@ def _new_user_hook() -> Callable[[uuid.UUID], None] | None:
 async def register(
     request: Request,
     payload: RegisterRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> RegisterResponse:
     service = AuthService(db, on_user_created=_new_user_hook())
     user = await service.register(payload)
@@ -68,7 +68,7 @@ async def register(
 async def login(
     request: Request,
     payload: LoginRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> TokenResponse:
     service = AuthService(db)
     return await service.login(payload)
@@ -83,7 +83,7 @@ async def login(
 async def google_login(
     request: Request,
     payload: GoogleLoginRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> TokenResponse:
     service = AuthService(db, on_user_created=_new_user_hook())
     return await service.google_login(payload)
@@ -98,7 +98,7 @@ async def google_login(
 async def refresh_tokens(
     request: Request,
     payload: RefreshTokenRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> TokenResponse:
     service = AuthService(db)
     return await service.refresh_tokens(payload.refresh_token)
@@ -123,7 +123,7 @@ async def get_me(
 async def change_password(
     payload: ChangePasswordRequest,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> None:
     service = AuthService(db)
     await service.change_password(
@@ -139,7 +139,7 @@ async def change_password(
 async def logout(
     request: Request,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db, scope="function"),
 ) -> None:
     token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
     service = AuthService(db)

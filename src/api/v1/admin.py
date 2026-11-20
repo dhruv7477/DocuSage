@@ -104,7 +104,9 @@ class PaginatedAuditLogsResponse(BaseModel):
 # ── Dependency ────────────────────────────────────────────────────
 
 
-def _admin_service(db: AsyncSession = Depends(get_db)) -> AdminService:
+def _admin_service(
+    db: AsyncSession = Depends(get_db, scope="function"),
+) -> AdminService:
     return AdminService(db)
 
 
