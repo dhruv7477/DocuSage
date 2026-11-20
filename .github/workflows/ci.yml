@@ -289,7 +289,9 @@ jobs:
 
   # ── Demo stack end to end ───────────────────────────────────────
   # docker/docker-compose.demo.yml on arm64, behind Caddy on https://localhost,
-  # with a mock OpenAI-compatible LLM instead of Groq.
+  # with a mock OpenAI-compatible LLM instead of Groq. Every service runs with
+  # the memory limit the 2 GB server uses; the job fails if any process is
+  # OOM-killed and reports peak memory per container in the job summary.
   e2e-demo:
     name: Demo stack end to end (arm64)
     runs-on: ubuntu-24.04-arm
@@ -300,6 +302,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # Before the stack starts, so the first boot (model downloads, sample
+      # ingestion) is measured too. Runs on the runner's own python3.
+      - name: Watch memory and OOM kills
+        run: |
+          mkdir -p "$RUNNER_TEMP/memory"
+          nohup python3 tests/e2e/memory_report.py watch "$RUNNER_TEMP/memory"             > "$RUNNER_TEMP/memory/watch.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/memory/watch.pid"
 
       - name: Start the demo stack
         run: tests/e2e/start-stack.sh
@@ -340,6 +350,13 @@ jobs:
           BACKUP_DIR="$RUNNER_TEMP/backups" deploy/backup-db.sh
           dump=$(ls "$RUNNER_TEMP"/backups/docusage-*.dump)
           $COMPOSE exec -T postgres pg_restore --list < "$dump" | grep -q "TABLE DATA public users"
+
+      - name: Memory report (fails on an OOM kill)
+        if: always()
+        run: |
+          kill "$(cat "$RUNNER_TEMP/memory/watch.pid")" 2>/dev/null || true
+          sleep 2
+          python3 tests/e2e/memory_report.py report "$RUNNER_TEMP/memory"
 
       - name: Service logs
         if: failure()
