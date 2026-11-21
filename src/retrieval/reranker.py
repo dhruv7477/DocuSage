@@ -97,11 +97,15 @@ class CrossEncoderReranker(BaseReranker):
     _model = None
     _loaded_model_name: str | None = None
 
-    def __init__(self, model_name: str | None = None) -> None:
-        # Read default lazily so tests / CI can monkey-patch settings.
+    def __init__(
+        self, model_name: str | None = None, batch_size: int | None = None
+    ) -> None:
+        # Read defaults lazily so tests / CI can monkey-patch settings.
         from src.configs.config import get_settings
 
-        self._model_name = model_name or get_settings().reranker_model
+        settings = get_settings()
+        self._model_name = model_name or settings.reranker_model
+        self._batch_size = batch_size or settings.reranker_batch_size
 
     @classmethod
     def _load_model(cls, model_name: str):
@@ -167,7 +171,7 @@ class CrossEncoderReranker(BaseReranker):
         model = self._load_model(self._model_name)
 
         pairs = [(query, r.payload.text) for r in results]
-        scores = model.predict(pairs)
+        scores = model.predict(pairs, batch_size=self._batch_size)
 
         # Pass raw logits through a sigmoid → [0, 1]. This makes the
         # confidence threshold (`abstention_threshold`) meaningful

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# One-time setup for the demo VM: Oracle Cloud Ampere A1, Ubuntu 22.04 or
-# 24.04 (aarch64). Installs Docker, adds a swap file, opens ports 80 and 443
-# in the host firewall, and installs the nightly database backup.
+# One-time setup for the demo server: Ubuntu 22.04 or 24.04 on arm64, such
+# as an AWS EC2 t4g.small or an Oracle Cloud Ampere A1 VM. Installs Docker,
+# adds a swap file, opens ports 80 and 443 in the host firewall where the
+# image blocks them (Oracle), and installs the nightly database backup.
 # Safe to re-run: every step checks before it changes anything.
 #
-# Usage, from the cloned repo:  sudo deploy/oracle/setup-vm.sh
+# Usage, from the cloned repo:  sudo deploy/setup-vm.sh
 # Options (environment): SWAP_SIZE=4G  SWAP_FILE=/swapfile  BACKUP_DIR=/var/backups/docusage
 set -euo pipefail
 
@@ -13,7 +14,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
-REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SWAP_SIZE="${SWAP_SIZE:-4G}"
 SWAP_FILE="${SWAP_FILE:-/swapfile}"
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/docusage}"
@@ -58,7 +59,8 @@ add_swap() {
     echo "Created a $SWAP_SIZE swap file at $SWAP_FILE."
   fi
   grep -qF "$SWAP_FILE none swap" /etc/fstab || echo "$SWAP_FILE none swap sw 0 0" >> /etc/fstab
-  # Swap is a safety net for build spikes, not working memory.
+  # Swap is a safety net (image builds, dockerd, a burst of page cache),
+  # not working memory: the containers' own limits allow no swap.
   echo 'vm.swappiness=10' > /etc/sysctl.d/99-docusage-swap.conf
   sysctl -q -p /etc/sysctl.d/99-docusage-swap.conf
 }
@@ -67,7 +69,8 @@ add_swap() {
 # except SSH. Insert ACCEPT rules for HTTP and HTTPS (and HTTP/3 over UDP)
 # before the first REJECT rule, both live and in the saved rules file.
 # The saved file is edited directly instead of `netfilter-persistent save`,
-# which would also persist Docker's own chains.
+# which would also persist Docker's own chains. AWS's Ubuntu images have no
+# such rules (the security group is the firewall), so nothing is added there.
 open_port() {
   local proto="$1" port="$2"
   local spec=(-p "$proto" -m state --state NEW -m "$proto" --dport "$port" -j ACCEPT)
@@ -93,8 +96,16 @@ open_port() {
   fi
 }
 
+host_firewall_rejects() {
+  iptables -S INPUT | grep -qE -- '-j (REJECT|DROP)( |$)'
+}
+
 open_firewall() {
   log "Host firewall"
+  if ! host_firewall_rejects; then
+    echo "The host firewall rejects nothing; nothing to open (the cloud firewall controls access)."
+    return
+  fi
   open_port tcp 80
   open_port tcp 443
   open_port udp 443
@@ -105,9 +116,9 @@ install_backup() {
   mkdir -p "$BACKUP_DIR"
   chmod 700 "$BACKUP_DIR"
   cat > /etc/cron.d/docusage-backup <<CRON
-# Nightly Postgres dump of the DocuSage demo (see deploy/oracle/README.md).
+# Nightly Postgres dump of the DocuSage demo (see deploy/README.md).
 SHELL=/bin/bash
-30 2 * * * root BACKUP_DIR=$BACKUP_DIR $REPO_DIR/deploy/oracle/backup-db.sh >> /var/log/docusage-backup.log 2>&1
+30 2 * * * root BACKUP_DIR=$BACKUP_DIR $REPO_DIR/deploy/backup-db.sh >> /var/log/docusage-backup.log 2>&1
 CRON
   chmod 644 /etc/cron.d/docusage-backup
   echo "Installed /etc/cron.d/docusage-backup (02:30 every night, dumps to $BACKUP_DIR)."
@@ -119,4 +130,4 @@ open_firewall
 install_backup
 
 log "Done"
-echo "Next: configure and start the stack, see deploy/oracle/README.md."
+echo "Next: configure and start the stack, see deploy/README.md."

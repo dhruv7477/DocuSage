@@ -159,7 +159,7 @@ LangChain and LangGraph are complementary, not competitors. LangGraph is built *
 
 ## 7. Deployment and Operations
 - **Local development:** Docker Compose brings up Postgres, Qdrant, Redis, SeaweedFS and Ollama; the API, the Celery worker and Vite run on the host.
-- **Public demo:** one Compose file runs the whole stack on a single small VM (built and tested on linux/arm64), with Caddy as the only public entry point (automatic HTTPS, security headers) and a hosted LLM (Groq) through the OpenAI-compatible provider. See `deploy/oracle/README.md`.
+- **Public demo:** one Compose file runs the whole stack on a single small VM (built and tested on linux/arm64), with Caddy as the only public entry point (automatic HTTPS, security headers) and a hosted LLM (Groq) through the OpenAI-compatible provider. See `deploy/README.md`.
 - **Migrations:** Alembic (`alembic upgrade head`), run automatically when the API container starts.
 - **CI:** lint → unit and integration tests → frontend → image builds for amd64 and arm64 → the demo stack end to end on arm64, plus the security workflows above. Images are built on the server from the repository; nothing is pushed to a registry.
 - **Tuning levers:** model selection per role, retrieval top-k and abstention threshold, chunk size and overlap, summary budgets, rate limits and quotas, all through environment configuration.

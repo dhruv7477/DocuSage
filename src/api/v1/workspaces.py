@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.rate_limit import limiter, setting_limit
-from src.db.session import get_db
+from src.db.session import DB_SESSION
 from src.dependencies import get_current_user
 from src.models.user import User
 from src.schemas.workspace import (
@@ -28,7 +28,9 @@ from src.vector_store.factory import get_vector_store
 router = APIRouter(prefix="/workspaces", tags=["Workspaces"])
 
 
-def _get_service(db: AsyncSession = Depends(get_db)) -> WorkspaceService:
+def _get_service(
+    db: AsyncSession = DB_SESSION,
+) -> WorkspaceService:
     return WorkspaceService(db, vector_store=get_vector_store())
 
 

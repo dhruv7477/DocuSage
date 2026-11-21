@@ -11,6 +11,7 @@ Design:
 
 from collections.abc import AsyncGenerator
 
+from fastapi import Depends
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -54,10 +55,18 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     Yields an AsyncSession scoped to a single HTTP request.
 
     Usage in route:
-        async def my_route(db: AsyncSession = Depends(get_db)): ...
+        async def my_route(db: AsyncSession = DB_SESSION): ...
 
     Commits on clean exit, rolls back on any exception.
     This prevents partial writes from leaking into the DB.
+
+    DB_SESSION below is this dependency with scope="function". With that
+    scope FastAPI runs the code after `yield` (the commit) when the endpoint
+    returns; with the default "request" scope, only after the response has
+    been sent. A client's next request (create a chat, then stream into it)
+    can then arrive before the commit and not find the row. Only the
+    streaming chat endpoint keeps the request scope, because its session
+    must stay open while the answer streams.
     """
     async with AsyncSessionLocal() as session:
         try:
@@ -68,3 +77,9 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             await session.close()
+
+
+# The session for every route except the streaming chat endpoint (see
+# get_db): committed when the endpoint returns, before the response is sent.
+#     async def my_route(db: AsyncSession = DB_SESSION): ...
+DB_SESSION = Depends(get_db, scope="function")

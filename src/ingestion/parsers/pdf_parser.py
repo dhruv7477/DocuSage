@@ -261,15 +261,13 @@ class PDFParser(BaseParser):
         out: dict[int, list[str]] = {}
         with pdfplumber.open(io.BytesIO(content)) as pdf:
             for i, page in enumerate(pdf.pages, start=1):
-                tables = page.find_tables() or []
-                page_tables: list[str] = []
-                for tbl in tables:
-                    rows = tbl.extract() or []
-                    if not rows or not rows[0]:
-                        continue
-                    md = _rows_to_markdown(rows)
-                    if md:
-                        page_tables.append(md)
+                try:
+                    page_tables = _page_tables_markdown(page)
+                finally:
+                    # pdfplumber keeps every page's parsed layout until the
+                    # document closes: about 140 MB for a 32-page PDF.
+                    # Closing each page when done keeps it at about 10 MB.
+                    page.close()
                 if page_tables:
                     out[i] = page_tables
         return out
@@ -349,6 +347,19 @@ class PDFParser(BaseParser):
 
 
 # ── Markdown table helper ─────────────────────────────────────────
+
+
+def _page_tables_markdown(page) -> list[str]:
+    """Every table pdfplumber finds on one page, as Markdown."""
+    tables: list[str] = []
+    for tbl in page.find_tables() or []:
+        rows = tbl.extract() or []
+        if not rows or not rows[0]:
+            continue
+        md = _rows_to_markdown(rows)
+        if md:
+            tables.append(md)
+    return tables
 
 
 def _rows_to_markdown(rows: list[list[str | None]]) -> str:
