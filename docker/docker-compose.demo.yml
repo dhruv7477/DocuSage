@@ -186,7 +186,7 @@ services:
       retries: 20
 
   qdrant:
-    image: qdrant/qdrant:v1.11.3
+    image: qdrant/qdrant:v1.20.1
     restart: unless-stopped
     logging: *logging
     environment:
@@ -196,7 +196,7 @@ services:
       - qdrant-data:/qdrant/storage
 
   seaweedfs:
-    image: chrislusf/seaweedfs:4.51
+    image: chrislusf/seaweedfs:4.53
     restart: unless-stopped
     logging: *logging
     environment:
