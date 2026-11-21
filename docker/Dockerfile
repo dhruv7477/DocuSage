@@ -1,5 +1,5 @@
 # ── Build Stage ────────────────────────────────────────────────────
-FROM python:3.15-slim AS builder
+FROM python:3.12-slim AS builder
 
 WORKDIR /src
 
@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir --only-binary :all: "$(grep '^torch==' constraint
     && pip uninstall -y pip
 
 # ── Runtime Stage ──────────────────────────────────────────────────
-FROM python:3.15-slim AS runtime
+FROM python:3.12-slim AS runtime
 
 WORKDIR /src
 
