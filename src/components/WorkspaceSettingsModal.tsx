@@ -8,6 +8,7 @@ import { useApp } from '@/store/app'
 import { useAuth } from '@/store/auth'
 import { Button } from '@/components/ui/Button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { ModalOverlay } from '@/components/ui/ModalOverlay'
 
 type Tab = 'general' | 'members' | 'danger'
 
@@ -100,7 +101,7 @@ function MembersTab({ workspaceId }: { workspaceId: string }) {
             onChange={(e) => setEmail(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && email.trim()) addMut.mutate() }}
             placeholder="user@example.com"
-            className="flex-1 h-9 px-3 rounded-lg bg-surface border border-border text-sm text-bright outline-none focus:border-teal/50 placeholder:text-dim"
+            className="flex-1 min-w-0 h-9 px-3 rounded-lg bg-surface border border-border text-sm text-bright outline-none focus:border-teal/50 placeholder:text-dim"
           />
           <Button
             variant="primary"
@@ -218,14 +219,8 @@ export function WorkspaceSettingsModal({
   ]
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-void/70 backdrop-blur-sm"
-      onClick={onClose}
-    >
-      <div
-        className="bg-panel border border-border rounded-xl shadow-panel w-full max-w-lg mx-4 overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <ModalOverlay onClose={onClose}>
+      <div className="relative bg-panel border border-border rounded-xl shadow-panel w-full max-w-lg mx-4 overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <h2 className="font-display text-base font-semibold text-bright">Workspace settings</h2>
@@ -255,13 +250,13 @@ export function WorkspaceSettingsModal({
           </div>
 
           {/* Content */}
-          <div className="flex-1 p-5 min-h-[280px]">
+          <div className="flex-1 min-w-0 p-5 min-h-[280px]">
             {tab === 'general' && <GeneralTab workspaceId={workspaceId} />}
             {tab === 'members' && <MembersTab workspaceId={workspaceId} />}
             {tab === 'danger' && <DangerTab workspaceId={workspaceId} onDeleted={onClose} />}
           </div>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   )
 }

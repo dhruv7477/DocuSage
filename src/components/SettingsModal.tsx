@@ -6,6 +6,7 @@ import toast from 'react-hot-toast'
 import { auth as authApi } from '@/api'
 import { useAuth } from '@/store/auth'
 import { Button } from '@/components/ui/Button'
+import { ModalOverlay } from '@/components/ui/ModalOverlay'
 
 type Tab = 'profile' | 'security' | 'about'
 
@@ -138,14 +139,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   ]
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-void/70 backdrop-blur-sm"
-      onClick={onClose}
-    >
-      <div
-        className="bg-panel border border-border rounded-xl shadow-panel w-full max-w-md mx-4 overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <ModalOverlay onClose={onClose}>
+      <div className="relative bg-panel border border-border rounded-xl shadow-panel w-full max-w-md mx-4 overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
           <h2 className="font-display text-base font-semibold text-bright">Settings</h2>
@@ -175,13 +170,13 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           </div>
 
           {/* Content */}
-          <div className="flex-1 p-5 min-h-[260px]">
+          <div className="flex-1 min-w-0 p-5 min-h-[260px]">
             {tab === 'profile' && <ProfileTab />}
             {tab === 'security' && <SecurityTab />}
             {tab === 'about' && <AboutTab />}
           </div>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   )
 }
