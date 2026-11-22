@@ -112,5 +112,5 @@ export async function setRootFontSize(page: Page, px: number): Promise<void> {
 
 /** The root element's computed font size, in px. */
 export async function rootFontSize(page: Page): Promise<number> {
-  return page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize))
+  return page.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).fontSize))
 }

@@ -197,8 +197,10 @@ jobs:
 
       # Layout in a real browser at 1920x936, 1366x768 and 390x844: pages and
       # dialogs taller than the window must scroll (tests/ui/).
+      # The binary from npm ci, at the version in package-lock.json: npx
+      # could fetch a package instead.
       - name: Install Chromium for the UI tests
-        run: npx playwright install --with-deps chromium
+        run: ./node_modules/.bin/playwright install --with-deps chromium
       - name: UI tests
         run: npm run test:ui
       - name: Keep UI test failures
