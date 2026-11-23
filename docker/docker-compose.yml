@@ -113,7 +113,7 @@ services:
 
   # ── Qdrant Vector DB ──────────────────────────────────────────
   qdrant:
-    image: qdrant/qdrant:v1.11.3
+    image: qdrant/qdrant:v1.20.2
     container_name: docusage-qdrant
     ports:
       - "127.0.0.1:6333:6333"   # REST API
@@ -154,7 +154,7 @@ services:
   # running on the host. Credentials come from S3_ACCESS_KEY and
   # S3_SECRET_KEY (or the old MINIO_* names) in the environment.
   seaweedfs:
-    image: chrislusf/seaweedfs:4.51
+    image: chrislusf/seaweedfs:4.54
     container_name: docusage-seaweedfs
     ports:
       - "127.0.0.1:9000:8333"   # S3 API
