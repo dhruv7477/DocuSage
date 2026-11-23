@@ -8,7 +8,7 @@
 
 services:
   mock-llm:
-    image: python:3.12-slim
+    image: python:3.15-slim
     command: ["python", "/mock_llm.py"]
     environment:
       MOCK_MODEL_IDS: "${LLM_MODEL},${ROUTER_MODEL},${SUMMARY_MODEL}"
