@@ -375,6 +375,20 @@ jobs:
           sleep 2
           python3 tests/e2e/memory_report.py report "$RUNNER_TEMP/memory"
 
+      # tests/eval/decline with no LLM call: fails if an answerable question
+      # is declined, or an off-topic request gets a summary of the documents.
+      # After the memory report: its one-off container is a second process
+      # the size of the API, which the 2 GB server never runs.
+      - name: Decline eval (no LLM calls)
+        run: |
+          E2E_CA_CERT="$RUNNER_TEMP/caddy-root.crt" \
+          DECLINE_EVAL_PASSWORD="$(python3 -c 'import secrets; print("Eval" + secrets.token_urlsafe(18) + "9")')" \
+            python -W ignore tests/eval/decline/setup_account.py --timeout 900
+          $COMPOSE run --rm --no-deps -e PYTHONPATH=/src -e LOG_LEVEL=WARNING \
+            -e OPENAI_BASE_URL=http://127.0.0.1:9/v1 -e OPENAI_API_KEY=decline-eval-guard \
+            --entrypoint python -v "$PWD/tests/eval/decline:/work:ro" \
+            api /work/run_decline_eval.py
+
       - name: Service logs
         if: failure()
         run: $COMPOSE logs --tail=200
