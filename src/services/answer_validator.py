@@ -9,7 +9,8 @@ time and block token streaming. These checks are cheap, deterministic,
 and catch the failure modes that actually occur:
 
 1. Hallucinated citations — `[7]` when only 5 sources exist — are
-   stripped so the UI never renders a dead chip.
+   stripped so the UI never renders a dead chip. Full-width markers
+   (`【3†p.2】`) are first rewritten as `[3]`.
 2. Broken abstention contract — retrieval said "abstain" but the model
    answered anyway → replace with the canonical phrase (the system
    prompt already demanded it; this enforces it).
@@ -28,6 +29,29 @@ from src.services.prompt_builder import NO_ANSWER_PHRASE
 log = get_logger(__name__)
 
 _CITATION_RE = re.compile(r"\[(\d+)\]")
+
+# gpt-oss models cite in their own form, 【3†p.2】 or 【1, 4】, instead of the
+# [n] the prompt asks for. Only a marker that is just numbers, or that carries
+# the dagger, is a citation: full-width brackets are ordinary punctuation in
+# CJK text. The lengths are bounded so a stray bracket cannot cause slow
+# backtracking.
+_FULL_WIDTH_CITATION_RE = re.compile(
+    r"【\s{0,3}(\d{1,3}(?:\s{0,3}[,，]\s{0,3}\d{1,3}){0,9})\s{0,3}(?:†[^】\n]{0,40})?】"
+    r"|【[^】†\n]{0,40}†[^】\n]{0,40}】"
+)
+_NUMBER_RE = re.compile(r"\d+")
+
+
+def normalize_citations(text: str) -> str:
+    """Rewrite full-width citation markers as [n], one per number; drop those without one."""
+
+    def _brackets(match: re.Match) -> str:
+        numbers = match.group(1)
+        if numbers is None:
+            return ""
+        return "".join(f"[{n}]" for n in _NUMBER_RE.findall(numbers))
+
+    return _FULL_WIDTH_CITATION_RE.sub(_brackets, text)
 
 
 @dataclass
@@ -65,7 +89,7 @@ def validate_answer(
         stripped.append(n)
         return ""
 
-    cleaned = _CITATION_RE.sub(_strip, answer)
+    cleaned = _CITATION_RE.sub(_strip, normalize_citations(answer))
     if stripped:
         # Tidy whitespace artifacts left by removed markers.
         cleaned = re.sub(r" {2,}", " ", cleaned)

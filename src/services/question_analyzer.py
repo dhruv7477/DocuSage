@@ -31,20 +31,28 @@ from src.providers.llm.base import BaseLLMProvider, LLMConfig, LLMMessage
 
 log = get_logger(__name__)
 
-# The fixed reply shown when a question can't be answered from the documents
-# — either it's off-topic, or retrieval found nothing relevant. It is never
-# composed by an LLM (a small model answers the off-topic question itself
-# even when told not to), so it's hard-coded to guarantee a clean decline.
-FALLBACK_OFF_TOPIC_REPLY = (
-    "I couldn't find anything about that in your documents. I can only answer "
-    "questions about the documents in this workspace — try rephrasing, or ask "
-    "for a summary."
-)
 
-GREETING_REPLY = (
-    "Hello! Ask me anything about the documents in this workspace, or ask "
-    "for a summary of one of them."
-)
+def decline_reply(*, summaries_enabled: bool) -> str:
+    """
+    The fixed reply when a question can't be answered from the documents:
+    it is off-topic, or retrieval found nothing relevant. Never composed by
+    an LLM (a small model answers the off-topic question itself even when
+    told not to), so the decline is always clean. It offers a summary only
+    when summaries are on; otherwise that request would be declined too.
+    """
+    ending = ", or ask for a summary." if summaries_enabled else "."
+    return (
+        "I couldn't find anything about that in your documents. I can only "
+        "answer questions about the documents in this workspace. Try "
+        f"rephrasing your question{ending}"
+    )
+
+
+def greeting_reply(*, summaries_enabled: bool) -> str:
+    """The fixed reply to a greeting; offers a summary only when summaries are on."""
+    ending = ", or ask for a summary of one of them." if summaries_enabled else "."
+    return f"Hello! Ask me anything about the documents in this workspace{ending}"
+
 
 # Whole-message match for greetings / pleasantries / chitchat openers.
 # Anchored so "hi, what does section 1 require?" does NOT match.
@@ -66,6 +74,41 @@ _SUMMARY_RE = re.compile(
     r"what\s+is\s+(this|the)\s+(doc(ument)?|file|pdf)\s+about)\b",
     re.IGNORECASE,
 )
+
+# A summary request takes the summary route only when it names nothing but
+# the documents: once these words and the words of the workspace's file
+# names are removed, nothing may be left. "Summarize the plot of Hamlet"
+# still names a subject, so it goes through the normal answer gate instead
+# of getting a summary of the user's own documents. Tuned on
+# tests/eval/decline (no answerable summary request lost).
+_WHOLE_DOCUMENT_WORDS = frozenset(
+    """
+    a an the this these that those it its them my our your their of in on for to
+    and or about me us please can could would you i we want need give provide
+    write make show tell get summary summaries summarize summarise summarizing
+    overview tldr tl dr executive brief short quick key main important findings
+    points highlights takeaways ideas details gist what whats is are was document
+    documents doc docs file files pdf pdfs upload uploaded attached attachment
+    attachments resume cv letter report paper form content contents text page
+    pages workspace whole entire all both everything
+    """.split()
+)
+_WORD_RE = re.compile(r"[a-z0-9]+")
+_APOSTROPHE_RE = re.compile(r"['‘’]")
+
+
+def _words(text: str) -> list[str]:
+    """Lowercase words, with apostrophes removed so "document's" is one word."""
+    return _WORD_RE.findall(_APOSTROPHE_RE.sub("", text.lower()))
+
+
+def _names_only_documents(query: str, documents: list[tuple[str, str]]) -> bool:
+    """True when every word of a summary request is generic or from a file name."""
+    file_words = {word for _, filename in documents for word in _words(filename)}
+    return all(
+        word in _WHOLE_DOCUMENT_WORDS or word in file_words for word in _words(query)
+    )
+
 
 _VALID_INTENTS = ("off_topic", "doc_summary", "rag_query")
 
@@ -110,11 +153,13 @@ class QuestionAnalyzer:
         max_tokens: int = 150,
         use_llm: bool = False,
         llm_timeout_seconds: float = 10.0,
+        summaries_enabled: bool = True,
     ) -> None:
         self._llm = llm
         self._max_tokens = max_tokens
         self._use_llm = use_llm
         self._llm_timeout = llm_timeout_seconds
+        self._summaries_enabled = summaries_enabled
 
     async def analyze(
         self,
@@ -180,7 +225,7 @@ class QuestionAnalyzer:
             # Router classifies only — it does NOT write the reply. Always use
             # the fixed refusal so off-topic questions are reliably declined,
             # never answered (a small model answers them even when told not to).
-            reply = FALLBACK_OFF_TOPIC_REPLY
+            reply = decline_reply(summaries_enabled=self._summaries_enabled)
 
         target_ids = _resolve_documents(raw.get("documents") or [], documents)
 
@@ -199,8 +244,8 @@ class QuestionAnalyzer:
 
     # ── Private ───────────────────────────────────────────────────
 
-    @staticmethod
     def _heuristic_route(
+        self,
         query: str,
         documents: list[tuple[str, str]],
     ) -> RouteDecision | None:
@@ -209,11 +254,15 @@ class QuestionAnalyzer:
 
         # Greetings / pleasantries — answer instantly, skip retrieval.
         if len(stripped.split()) <= 6 and _GREETING_RE.match(stripped):
-            return RouteDecision(intent="off_topic", reply=GREETING_REPLY)
+            return RouteDecision(
+                intent="off_topic",
+                reply=greeting_reply(summaries_enabled=self._summaries_enabled),
+            )
 
         # Summary requests — route to the doc-summary agent. Filename
-        # mentions in the query narrow the target set ([] = all docs).
-        if _SUMMARY_RE.search(stripped):
+        # mentions in the query narrow the target set ([] = all docs). A
+        # request with its own subject falls through to the answer gate.
+        if _SUMMARY_RE.search(stripped) and _names_only_documents(stripped, documents):
             lowered = stripped.lower()
             targets = [
                 doc_id

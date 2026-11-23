@@ -15,9 +15,9 @@ import pytest
 
 from src.providers.llm.base import LLMResponse
 from src.services.question_analyzer import (
-    FALLBACK_OFF_TOPIC_REPLY,
-    GREETING_REPLY,
     QuestionAnalyzer,
+    decline_reply,
+    greeting_reply,
 )
 
 pytestmark = pytest.mark.unit
@@ -58,7 +58,7 @@ class TestHeuristicTier:
         llm = AsyncMock()
         decision = await QuestionAnalyzer(llm).analyze(greeting, documents=DOCS)
         assert decision.intent == "off_topic"
-        assert decision.reply == GREETING_REPLY
+        assert decision.reply == greeting_reply(summaries_enabled=True)
         llm.generate.assert_not_called()
 
     @pytest.mark.asyncio
@@ -119,7 +119,7 @@ class TestLLMTier:
             "what is a boy?", documents=DOCS
         )
         assert decision.intent == "off_topic"
-        assert decision.reply == FALLBACK_OFF_TOPIC_REPLY
+        assert decision.reply == decline_reply(summaries_enabled=True)
         assert "male child" not in decision.reply
 
     @pytest.mark.asyncio
@@ -148,7 +148,7 @@ class TestLLMTier:
         decision = await QuestionAnalyzer(llm, use_llm=True).analyze(
             "tell me a joke about cats", documents=DOCS
         )
-        assert decision.reply == FALLBACK_OFF_TOPIC_REPLY
+        assert decision.reply == decline_reply(summaries_enabled=True)
 
     @pytest.mark.asyncio
     async def test_doc_summary_resolves_filename_fragment(self):
@@ -234,3 +234,85 @@ class TestFailOpen:
             llm, use_llm=True, llm_timeout_seconds=0.05
         ).analyze("a real question", documents=DOCS)
         assert decision.intent == "rag_query"
+
+
+class TestReplies:
+    """The fixed replies: plain punctuation, and a summary is offered only when
+    summaries are turned on (asking for one would otherwise be declined too)."""
+
+    def test_decline_offers_a_summary_only_when_summaries_are_on(self):
+        assert "summary" in decline_reply(summaries_enabled=True)
+        assert "summary" not in decline_reply(summaries_enabled=False)
+
+    def test_greeting_offers_a_summary_only_when_summaries_are_on(self):
+        assert "summary" in greeting_reply(summaries_enabled=True)
+        assert "summary" not in greeting_reply(summaries_enabled=False)
+
+    @pytest.mark.parametrize("enabled", [True, False])
+    def test_replies_have_no_em_dash(self, enabled):
+        em_dash = chr(0x2014)
+        assert em_dash not in decline_reply(summaries_enabled=enabled)
+        assert em_dash not in greeting_reply(summaries_enabled=enabled)
+
+    @pytest.mark.asyncio
+    async def test_analyzer_uses_the_summaries_setting(self):
+        llm = AsyncMock()
+        analyzer = QuestionAnalyzer(llm, summaries_enabled=False)
+        decision = await analyzer.analyze("hi", documents=DOCS)
+        assert decision.reply == greeting_reply(summaries_enabled=False)
+
+    @pytest.mark.asyncio
+    async def test_llm_off_topic_fallback_uses_the_summaries_setting(self):
+        llm = AsyncMock()
+        llm.generate.return_value = LLMResponse(
+            content='{"intent": "off_topic"}',
+            model="m",
+            prompt_tokens=1,
+            completion_tokens=1,
+        )
+        decision = await QuestionAnalyzer(
+            llm, use_llm=True, summaries_enabled=False
+        ).analyze("tell me a joke about cats", documents=DOCS)
+        assert decision.reply == decline_reply(summaries_enabled=False)
+
+
+class TestSummaryGuard:
+    """
+    A summary request goes to the summary route only when it names nothing
+    but the documents; one with its own subject ("Summarize the plot of
+    Hamlet") goes through the normal answer gate, which declines it.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "request_text",
+        [
+            "Summary of the document",
+            "Summarize the key findings in the uploaded documents",
+            "Give a summary",
+            "What is this document about?",
+            "TL;DR",
+            "Summarize the document\u2019s key points",  # curly apostrophe
+            "Summarize i-9instr.pdf",  # a workspace file name
+        ],
+    )
+    async def test_whole_document_requests_take_the_summary_route(self, request_text):
+        llm = AsyncMock()
+        decision = await QuestionAnalyzer(llm).analyze(request_text, documents=DOCS)
+        assert decision.intent == "doc_summary"
+        llm.generate.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "request_text",
+        [
+            "Summarize the plot of Hamlet",
+            "Give me a summary of World War II",
+            "Summarize section 2",
+        ],
+    )
+    async def test_a_request_with_its_own_subject_goes_to_the_gate(self, request_text):
+        llm = AsyncMock()
+        decision = await QuestionAnalyzer(llm).analyze(request_text, documents=DOCS)
+        assert decision.intent == "rag_query"
+        llm.generate.assert_not_called()

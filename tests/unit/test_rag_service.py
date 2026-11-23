@@ -7,15 +7,17 @@ prompt build → LLM call.
 """
 
 import uuid
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from src.core.exceptions import LLMProviderError
+from src.configs.config import Settings
 from src.models.user import User, UserRole
-from src.providers.llm.base import LLMResponse
+from src.providers.llm.base import EMPTY_ANSWER_MESSAGE, LLMResponse
 from src.retrieval.hybrid import HybridRetriever
 from src.retrieval.query_understanding import QueryEnrichment
-from src.retrieval.reranker import NoOpReranker
+from src.retrieval.reranker import BaseReranker, NoOpReranker
 from src.services.rag_service import RAGService, _extract_sources
 from src.vector_store.base import SearchResult, VectorPayload
 
@@ -111,7 +113,9 @@ def rag_service(mock_embedder, mock_vector_store, mock_llm, mock_query_understan
         reranker=NoOpReranker(),
         query_understanding=mock_query_understanding,
         top_k=5,
-        abstention_threshold=0.0,  # tests don't exercise abstention
+        # Never decline: these tests don't exercise the answer gate.
+        reranker_threshold=0.0,
+        cosine_threshold=0.0,
     )
 
 
@@ -255,3 +259,156 @@ class TestExtractSources:
 
     def test_empty_results_returns_empty(self):
         assert _extract_sources([]) == []
+
+
+class TestEmptyAnswer:
+    """A reasoning model can return no text at all; the user gets a retry message."""
+
+    @pytest.mark.asyncio
+    async def test_empty_streamed_answer_raises_the_retry_message(
+        self, rag_service, mock_llm
+    ):
+        async def _nothing(messages, config):
+            return
+            yield  # an async generator that yields nothing
+
+        mock_llm.stream = _nothing
+        _, tokens = await rag_service.prepare_stream(
+            "Query", uuid.uuid4(), _make_user()
+        )
+        with pytest.raises(LLMProviderError) as caught:
+            _ = [token async for token in tokens]
+        assert caught.value.message == EMPTY_ANSWER_MESSAGE
+
+    @pytest.mark.asyncio
+    async def test_empty_generated_answer_raises_the_retry_message(
+        self, rag_service, mock_llm
+    ):
+        mock_llm.generate.return_value = LLMResponse(content="  \n", model="m")
+        with pytest.raises(LLMProviderError) as caught:
+            await rag_service.generate("Query", uuid.uuid4(), _make_user())
+        assert caught.value.message == EMPTY_ANSWER_MESSAGE
+
+
+class _FixedReranker(BaseReranker):
+    """Gives the candidates the reranker scores a test needs, in order."""
+
+    def __init__(self, scores: list[float]) -> None:
+        self._scores = scores
+
+    async def rerank(self, query, results, top_k):
+        return [
+            SearchResult(chunk_id=r.chunk_id, score=s, payload=r.payload)
+            for r, s in zip(results, self._scores)
+        ][:top_k]
+
+
+def _gated_service(
+    embedder, store, llm, query_understanding, *, reranker_top, cosine_top
+):
+    store.search.return_value = (
+        [_make_search_result("A chunk.", score=cosine_top)]
+        if cosine_top is not None
+        else []
+    )
+    return RAGService(
+        embedder=embedder,
+        vector_store=store,
+        llm=llm,
+        retriever=HybridRetriever(embedder=embedder, vector_store=store, candidate_k=5),
+        reranker=_FixedReranker([reranker_top]),
+        query_understanding=query_understanding,
+        reranker_threshold=0.5,
+        cosine_threshold=0.48,
+    )
+
+
+class TestAnswerGate:
+    """
+    The cross-encoder ranks well but misses answers worded unlike the
+    question ("the candidate" against a resume), so a question is declined
+    without an LLM call only when BOTH its top reranker score and its top
+    dense cosine are low. Everything else goes to the LLM, which can still
+    say the documents don't cover it.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("reranker_top", "cosine_top", "declined"),
+        [
+            (0.0, 0.55, False),  # the resume case: reranker misses, cosine doesn't
+            (0.0, 0.45, True),  # clearly irrelevant on both
+            (0.9, 0.45, False),  # a strong reranker hit vetoes a low cosine
+            (0.5, 0.40, False),  # at the reranker cut-off: not below it
+            (0.1, 0.48, False),  # at the cosine cut-off: not below it
+            (0.0, 0.4979, False),  # a one-page resume asked for the name
+        ],
+    )
+    async def test_declines_only_when_both_scores_are_low(
+        self,
+        mock_embedder,
+        mock_vector_store,
+        mock_llm,
+        mock_query_understanding,
+        reranker_top,
+        cosine_top,
+        declined,
+    ):
+        svc = _gated_service(
+            mock_embedder,
+            mock_vector_store,
+            mock_llm,
+            mock_query_understanding,
+            reranker_top=reranker_top,
+            cosine_top=cosine_top,
+        )
+        outcome, _ = await svc.prepare_stream("Question", uuid.uuid4(), _make_user())
+        assert svc._is_abstaining(outcome) is declined
+
+    @pytest.mark.asyncio
+    async def test_no_candidates_declines(
+        self, mock_embedder, mock_vector_store, mock_llm, mock_query_understanding
+    ):
+        svc = _gated_service(
+            mock_embedder,
+            mock_vector_store,
+            mock_llm,
+            mock_query_understanding,
+            reranker_top=0.9,
+            cosine_top=None,
+        )
+        outcome, _ = await svc.prepare_stream("Question", uuid.uuid4(), _make_user())
+        assert svc._is_abstaining(outcome)
+
+    @pytest.mark.asyncio
+    async def test_each_decision_is_logged_once_without_the_question(
+        self, mock_embedder, mock_vector_store, mock_llm, mock_query_understanding
+    ):
+        svc = _gated_service(
+            mock_embedder,
+            mock_vector_store,
+            mock_llm,
+            mock_query_understanding,
+            reranker_top=0.0,
+            cosine_top=0.55,
+        )
+        with patch("src.services.rag_service.log") as log:
+            await svc.prepare_stream(
+                "What is the secret question?", uuid.uuid4(), _make_user()
+            )
+        gate = [c for c in log.info.call_args_list if c.args[0] == "rag_gate"]
+        assert len(gate) == 1
+        assert gate[0].kwargs == {
+            "zone": "llm",
+            "reranker_top": 0.0,
+            "cosine_top": 0.55,
+            "candidates": 1,
+            "reranker_threshold": 0.5,
+            "cosine_threshold": 0.48,
+        }
+        assert "secret" not in str(gate[0])
+
+    def test_defaults_are_the_tuned_cut_offs(self):
+        settings = Settings()
+        assert settings.abstention_reranker_threshold == 0.5
+        assert settings.abstention_cosine_threshold == 0.48

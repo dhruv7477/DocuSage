@@ -158,9 +158,9 @@ class Settings(BaseSettings):
 
     # ── RAG ──────────────────────────────────────────────────────
     # Recall-first defaults: pull a wide candidate pool with no score
-    # threshold, then let the cross-encoder reranker decide. The
-    # confidence-based abstention path (mean of top-3 reranker scores)
-    # replaces the previous hard threshold filter.
+    # threshold, then let the cross-encoder reranker order them. The
+    # answer gate (abstention_*_threshold below) replaces the previous
+    # hard threshold filter.
     rag_top_k: int = 8
     rag_score_threshold: float = 0.0
     chunk_size: int = 800
@@ -189,9 +189,17 @@ class Settings(BaseSettings):
     # Candidates fetched per retrieval branch before fusion+reranking.
     # Kept at 20 for CPU — the reranker is O(n) so fewer candidates = faster.
     retrieval_candidate_k: int = 20
-    # Mean of top-3 reranker scores below this triggers an abstention
-    # signal; the prompt builder swaps to a "graceful no-answer" branch.
-    abstention_threshold: float = 0.3
+    # The answer gate. A question is declined without an LLM call only when
+    # BOTH its top reranker score and its top dense cosine are below these;
+    # everything else goes to the LLM, which can still say the documents
+    # don't cover it. The cross-encoder ranks well but misses answers worded
+    # unlike the question ("the candidate" against a resume), so it never
+    # declines alone. Tuned on tests/eval/decline (see its README), where
+    # the cosine cut-off came out at 0.5065; it is 0.48 because an entity
+    # question on a real one-page resume scored 0.4979. Each decision is
+    # logged as `rag_gate` with both scores, for retuning.
+    abstention_reranker_threshold: float = 0.5
+    abstention_cosine_threshold: float = 0.48
     # Enable hybrid (dense + sparse) retrieval. The Phase 3 rewrite uses a
     # Qdrant full-text payload index; the legacy pipeline reuses this flag
     # for its (weaker) BM25-over-vector-results fallback.

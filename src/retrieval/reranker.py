@@ -16,13 +16,14 @@ Pipeline position:
 Output convention
 -----------------
 Reranker scores are passed through a sigmoid so they live in [0, 1]
-regardless of the underlying model's logit range. This means
-downstream code can use a single `abstention_threshold` setting (0.3
-by default) without knowing which cross-encoder is loaded.
+regardless of the underlying model's logit range, so the answer gate's
+`abstention_reranker_threshold` does not depend on which cross-encoder is
+loaded. The gate reads the top score only, and never declines on the
+reranker alone (see `RAGService._gate`): the cross-encoder ranks well but
+scores answers worded unlike the question near zero.
 
 `compute_confidence()` returns the mean of the top-3 (post-sigmoid)
-scores. The RAG service uses it to decide whether to send the LLM a
-full grounded-answer prompt or the abstention branch.
+scores, reported with each answer.
 """
 
 from __future__ import annotations
@@ -174,7 +175,7 @@ class CrossEncoderReranker(BaseReranker):
         scores = model.predict(pairs, batch_size=self._batch_size)
 
         # Pass raw logits through a sigmoid → [0, 1]. This makes the
-        # confidence threshold (`abstention_threshold`) meaningful
+        # gate's `abstention_reranker_threshold` meaningful
         # across cross-encoders with different output ranges. For
         # bge-reranker-v2-m3 logits sit roughly in [-10, +10].
         scored: list[tuple[SearchResult, float]] = []
@@ -315,14 +316,13 @@ def _sigmoid(x: float) -> float:
 
 def compute_confidence(reranked: list[SearchResult]) -> float:
     """
-    Aggregate reranker confidence as the mean of the top-3 scores.
+    Aggregate reranker confidence as the mean of the top-3 scores,
+    reported with each answer (logs and the sources event).
 
-    Mean-of-top-3 is the cheapest signal that handles two failure
-    modes well: (a) one freak high-scoring chunk that doesn't actually
-    answer the question, and (b) lots of mid-ranked chunks that
-    collectively look promising but aren't. The retrieval pipeline
-    feeds this into `abstention_threshold` to decide whether to send
-    the LLM the grounded-answer prompt or the no-answer prompt.
+    It no longer decides whether to answer: a fact that lives in one
+    chunk scores at most a third of its own score when the other two
+    are unrelated, so a short document could never pass. The answer
+    gate is `RAGService._gate`.
 
     Returns 0.0 for an empty list so empty retrieval is treated as
     maximum-uncertainty.
