@@ -1,4 +1,5 @@
 import { Button } from './Button'
+import { ModalOverlay } from './ModalOverlay'
 
 interface ConfirmDialogProps {
   title: string
@@ -18,14 +19,8 @@ export function ConfirmDialog({
   onCancel,
 }: ConfirmDialogProps) {
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-void/70 backdrop-blur-sm"
-      onClick={onCancel}
-    >
-      <div
-        className="bg-panel border border-border rounded-xl shadow-panel w-full max-w-sm mx-4 p-6"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <ModalOverlay onClose={onCancel}>
+      <div className="relative bg-panel border border-border rounded-xl shadow-panel w-full max-w-sm mx-4 p-6">
         <h2 className="font-display text-base font-semibold text-bright mb-2">{title}</h2>
         <p className="text-sm text-subtle mb-6 leading-relaxed">{description}</p>
         <div className="flex gap-2 justify-end">
@@ -41,6 +36,6 @@ export function ConfirmDialog({
           </Button>
         </div>
       </div>
-    </div>
+    </ModalOverlay>
   )
 }

@@ -11,6 +11,9 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+# Playwright (npx playwright test)
+test-results/
+playwright-report/
 downloads/
 eggs/
 .eggs/

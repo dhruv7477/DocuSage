@@ -102,6 +102,7 @@ ruff check src/ tests/ scripts/ && ruff format --check src/ tests/ scripts/
 pytest tests/unit                 # no services needed
 pytest tests/integration          # tests that need Postgres, Redis, Qdrant or SeaweedFS skip when those are not reachable
 npm test && npm run typecheck
+npm run build && npm run test:ui  # layout in Chromium at three window sizes (once: npx playwright install chromium)
 ```
 
 CI (`.github/workflows/ci.yml`) runs all of these with real Postgres, Redis, Qdrant and SeaweedFS containers. It builds the images for amd64 and arm64, runs the demo stack end to end on arm64 with a mock LLM (`tests/e2e/`), and runs the VM setup script on a fresh runner.

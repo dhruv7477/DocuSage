@@ -47,43 +47,50 @@ function GoogleSection({
 
 // ── Shared bg decoration ──────────────────────────────────────────
 function AuthShell({ children }: { children: React.ReactNode }) {
+  // The document itself never scrolls (index.html hides its overflow for
+  // the app shell), so this page is its own scroll container: when the form
+  // is taller than the window (the demo notice, a large font size, a small
+  // screen), it scrolls; when it fits, it stays centred as before.
   return (
-    <div className="relative min-h-[100dvh] bg-void overflow-hidden flex items-center justify-center">
-      {/* Scrolling alignment grid */}
-      <div className="absolute inset-0 bg-grid motion-safe:animate-grid-scroll opacity-70" />
+    <div className="h-[100dvh] overflow-y-auto">
+      <div className="relative min-h-full bg-void overflow-hidden flex items-center justify-center">
+        {/* Scrolling alignment grid */}
+        <div className="absolute inset-0 bg-grid motion-safe:animate-grid-scroll opacity-70" />
 
-      {/* Radial glow + depth */}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_60%_50%_at_50%_-10%,rgba(31,240,230,0.10),transparent)]" />
-      <div className="absolute -bottom-1/3 -left-1/4 w-[60vw] h-[60vh] rounded-full bg-[radial-gradient(circle,rgba(157,107,255,0.06),transparent_60%)] blur-3xl motion-safe:animate-aurora-slow pointer-events-none" />
+        {/* Radial glow + depth */}
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_60%_50%_at_50%_-10%,rgba(31,240,230,0.10),transparent)]" />
+        <div className="absolute -bottom-1/3 -left-1/4 w-[60vw] h-[60vh] rounded-full bg-[radial-gradient(circle,rgba(157,107,255,0.06),transparent_60%)] blur-3xl motion-safe:animate-aurora-slow pointer-events-none" />
 
-      {/* CRT scanlines + drifting sweep */}
-      <div className="absolute inset-0 bg-scanlines opacity-50 mix-blend-screen pointer-events-none" />
-      <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-teal/[0.07] to-transparent pointer-events-none motion-safe:animate-scanline" />
+        {/* CRT scanlines + drifting sweep */}
+        <div className="absolute inset-0 bg-scanlines opacity-50 mix-blend-screen pointer-events-none" />
+        <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-teal/[0.07] to-transparent pointer-events-none motion-safe:animate-scanline" />
 
-      {/* Corner accents */}
-      <div className="absolute top-0 left-0 w-48 h-48 border-l border-t border-teal/15" />
-      <div className="absolute bottom-0 right-0 w-48 h-48 border-r border-b border-teal/15" />
+        {/* Corner accents */}
+        <div className="absolute top-0 left-0 w-48 h-48 border-l border-t border-teal/15" />
+        <div className="absolute bottom-0 right-0 w-48 h-48 border-r border-b border-teal/15" />
 
-      {/* Vignette */}
-      <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(ellipse_at_center,transparent_55%,rgba(0,0,0,0.55))]" />
+        {/* Vignette */}
+        <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(ellipse_at_center,transparent_55%,rgba(0,0,0,0.55))]" />
 
-      {/* Logo */}
-      <div className="absolute top-6 sm:top-8 left-6 sm:left-8 flex items-center gap-2.5">
-        <div className="w-7 h-7 rounded bg-teal/10 border border-teal/30 flex items-center justify-center shadow-teal">
-          <Zap className="w-4 h-4 text-teal" strokeWidth={2.5} />
+        {/* Logo */}
+        <div className="absolute top-6 sm:top-8 left-6 sm:left-8 flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded bg-teal/10 border border-teal/30 flex items-center justify-center shadow-teal">
+            <Zap className="w-4 h-4 text-teal" strokeWidth={2.5} />
+          </div>
+          <span className="font-hud text-base font-semibold text-bright tracking-wider glow-text">
+            DocuSage
+          </span>
         </div>
-        <span className="font-hud text-base font-semibold text-bright tracking-wider glow-text">
-          DocuSage
-        </span>
-      </div>
 
-      {/* Version badge */}
-      <div className="absolute top-6 sm:top-8 right-6 sm:right-8 font-mono text-2xs text-teal/70 border border-teal/20 px-2 py-1 rounded">
-        v1.0
-      </div>
+        {/* Version badge */}
+        <div className="absolute top-6 sm:top-8 right-6 sm:right-8 font-mono text-2xs text-teal/70 border border-teal/20 px-2 py-1 rounded">
+          v1.0
+        </div>
 
-      <div className="relative z-10 w-full max-w-sm px-4">
-        {children}
+        {/* Vertical padding keeps a tall form clear of the logo above it. */}
+        <div className="relative z-10 w-full max-w-sm px-4 py-20">
+          {children}
+        </div>
       </div>
     </div>
   )
