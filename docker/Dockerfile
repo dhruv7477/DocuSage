@@ -18,8 +18,13 @@ FROM python:3.12-slim AS runtime
 
 WORKDIR /src
 
-# upgrade: security fixes released since the base image was built.
-RUN apt-get update && apt-get upgrade -y \
+# upgrade: security fixes released since the base image was built. A cached
+# layer would keep the packages of the day it was built, so the step depends
+# on APT_UPGRADE_DATE: the image scan and deploy/ship-images.sh pass today's
+# date, which reruns it.
+ARG APT_UPGRADE_DATE=unset
+RUN echo "packages upgraded on ${APT_UPGRADE_DATE}" \
+    && apt-get update && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
