@@ -16,6 +16,7 @@ import { useSSE, type StreamWarning } from '@/hooks/useSSE'
 import { useSourcePanel } from '@/store/source-panel'
 import { usePageImage } from '@/hooks/usePageImage'
 import { CitationLens } from './CitationLens'
+import { citedSourceNumbers, normalizeCitations, splitCitations } from './citations'
 import { SourcePanel } from './SourcePanel'
 import { ThinkingStatus } from './ThinkingStatus'
 import { MessagesSkeleton } from './Skeletons'
@@ -78,7 +79,6 @@ function WarningBanner({ warning }: { warning: StreamWarning }) {
     warning.code === 'low_confidence' ? 'Low confidence'
     : warning.code === 'no_documents' ? 'No documents indexed'
     : warning.code === 'partial_context' ? 'Partial match'
-    : warning.code === 'summaries_disabled' ? 'Summaries off'
     : 'Notice'
   return (
     <div className="flex items-start gap-2 px-3 py-2 mt-2 bg-amber/8 border border-amber/25 rounded-lg text-xs">
@@ -93,16 +93,17 @@ function WarningBanner({ warning }: { warning: StreamWarning }) {
 
 // ── Citation helpers ──────────────────────────────────────────────
 
-// Citations live in the "Check sources" carousel, not inline. Strip the
-// [n] markers from the answer text (and tidy the spacing/punctuation they
-// leave behind). The trailing-partial rule keeps a half-streamed "[1"
-// from flickering while tokens arrive. The last rule only starts at the
-// beginning of a whitespace run, so a long run that is not followed by
-// punctuation is scanned once, not once per character.
+// While an answer streams its sources are not known yet, so its [n]
+// markers are hidden (with the spacing and punctuation they leave behind);
+// the saved answer then shows them as chips. The trailing-partial rules keep
+// a half-streamed "[1" or "【1†p" from flickering while tokens arrive. The
+// last rule only starts at the beginning of a whitespace run, so a long run
+// that is not followed by punctuation is scanned once, not once per character.
 export function stripCitations(content: string): string {
-  return content
+  return normalizeCitations(content)
     .replace(/\[\d+\]/g, '')
     .replace(/\[\d*$/, '')
+    .replace(/【[^】\n]{0,40}$/, '')
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/(?<!\s)\s+([.,;:!?])/g, '$1')
 }
@@ -148,18 +149,49 @@ function SourcePreview({ source }: { source: CitedSource }) {
   )
 }
 
+// ── Citation chip ─────────────────────────────────────────────────
+// An inline [n] for source n. Hover or click shows the passage (and a way
+// to open the page) via the CitationLens popover.
+function CitationChip({ n, source, query }: { n: number; source: CitedSource; query?: string }) {
+  return (
+    <CitationLens source={source} query={query}>
+      <button
+        type="button"
+        aria-label={`Source ${n}`}
+        title={`Source ${n}: ${source.source}`}
+        className="inline-flex align-baseline items-center font-mono text-2xs font-bold text-teal/90 bg-teal/[0.08] hover:bg-teal/15 hover:text-teal border border-teal/20 hover:border-teal/40 rounded px-1 mx-0.5 transition-colors"
+      >
+        [{n}]
+      </button>
+    </CitationLens>
+  )
+}
+
+// An answer with its [n] markers as chips; markers with no source are dropped.
+function AnswerText({ content, sources, query }: { content: string; sources: CitedSource[]; query?: string }) {
+  return (
+    <>
+      {splitCitations(content, sources.length).map((part, i) =>
+        'text' in part
+          ? <span key={i}>{part.text}</span>
+          : <CitationChip key={i} n={part.source} source={sources[part.source - 1]} query={query} />,
+      )}
+    </>
+  )
+}
+
 // ── Source carousel card ──────────────────────────────────────────
-// `rank` is the 1-based similarity position. `showPreview` renders the
-// cropped paragraph screenshot (reserved for the top source(s)). Hover or
-// click reveals the full passage via the CitationLens popover.
+// `label` is [n] for a cited source, or #rank by similarity. `showPreview`
+// renders the cropped paragraph screenshot (reserved for the first cards).
+// Hover or click reveals the full passage via the CitationLens popover.
 function SourceCard({
   source,
-  rank,
+  label,
   showPreview,
   query,
 }: {
   source: CitedSource
-  rank: number
+  label: string
   showPreview: boolean
   query?: string
 }) {
@@ -171,7 +203,7 @@ function SourceCard({
       <CitationLens source={source} query={query} block>
         <div className="h-full hud-panel rounded-lg p-2.5 cursor-pointer hover:border-teal/40 hover:shadow-teal transition-all group">
           <div className="flex items-center gap-2 text-xs">
-            <span className="font-mono text-teal font-bold glow-text shrink-0">#{rank}</span>
+            <span className="font-mono text-teal font-bold glow-text shrink-0">{label}</span>
             <span className="text-subtle truncate flex-1" title={source.source}>{source.source}</span>
             <Eye className="w-3.5 h-3.5 text-dim group-hover:text-teal transition-colors shrink-0" />
           </div>
@@ -190,24 +222,35 @@ function SourceCard({
 }
 
 // ── Collapsible source carousel ───────────────────────────────────
-// Hidden behind a "Check sources" toggle. We keep ONLY the most relevant
-// source(s) by similarity (desc): a single source document → top 2;
-// multiple documents → just the single highest-similarity passage. Every
-// kept card shows its cropped paragraph screenshot.
+// Hidden behind a "Check sources" toggle. When the answer cites sources, it
+// lists exactly those, in the order first cited and under the same [n] as
+// their chips. Otherwise it keeps only the most relevant source(s) by
+// similarity: a single source document → top 2; multiple documents → just
+// the single highest-similarity passage. The first cards show their cropped
+// paragraph screenshot.
+const PREVIEW_CARDS = 2
+
+function keptSources(sources: CitedSource[], cited: number[]): { source: CitedSource; label: string }[] {
+  if (cited.length) return cited.map((n) => ({ source: sources[n - 1], label: `[${n}]` }))
+  const ranked = [...sources].sort((a, b) => b.score - a.score)
+  const distinctDocs = new Set(sources.map((s) => s.document_id)).size
+  const keepCount = distinctDocs === 1 ? 2 : 1
+  return ranked.slice(0, keepCount).map((source, i) => ({ source, label: `#${i + 1}` }))
+}
+
 function SourcesDisclosure({
   sources,
+  cited,
   query,
 }: {
   sources: CitedSource[]
+  cited: number[]
   query?: string
 }) {
   const [open, setOpen] = useState(false)
   if (!sources.length) return null
 
-  const ranked = [...sources].sort((a, b) => b.score - a.score)
-  const distinctDocs = new Set(sources.map((s) => s.document_id)).size
-  const keepCount = distinctDocs === 1 ? 2 : 1
-  const kept = ranked.slice(0, keepCount)
+  const kept = keptSources(sources, cited)
 
   return (
     <div className="mt-2 w-full min-w-0">
@@ -224,12 +267,12 @@ function SourcesDisclosure({
       </button>
       {open && (
         <div className="mt-1.5 flex gap-2 overflow-x-auto pb-2 snap-x snap-mandatory animate-fade-up">
-          {kept.map((s, rank) => (
+          {kept.map(({ source, label }, i) => (
             <SourceCard
-              key={`${s.document_id}-${s.chunk_id ?? rank}`}
-              source={s}
-              rank={rank + 1}
-              showPreview
+              key={`${source.document_id}-${source.chunk_id ?? i}`}
+              source={source}
+              label={label}
+              showPreview={i < PREVIEW_CARDS}
               query={query}
             />
           ))}
@@ -243,6 +286,7 @@ function SourcesDisclosure({
 function MessageBubble({ msg, userQuery }: { msg: Message; userQuery?: string }) {
   const isUser = msg.role === 'user'
   const sources: CitedSource[] = msg.sources ?? []
+  const cited = isUser ? [] : citedSourceNumbers(msg.content, sources.length)
 
   return (
     <motion.div
@@ -272,11 +316,11 @@ function MessageBubble({ msg, userQuery }: { msg: Message; userQuery?: string })
             ? 'bg-plasma/[0.07] border border-plasma/25 text-bright'
             : 'hud-panel text-bright'
         )}>
-          {isUser ? msg.content : stripCitations(msg.content)}
+          {isUser ? msg.content : <AnswerText content={msg.content} sources={sources} query={userQuery} />}
         </div>
 
         {/* Sources (collapsed dropdown; RAG answers only) */}
-        {sources.length > 0 && <SourcesDisclosure sources={sources} query={userQuery} />}
+        {sources.length > 0 && <SourcesDisclosure sources={sources} cited={cited} query={userQuery} />}
 
         {/* Timestamp */}
         <p className="mt-1 font-mono text-2xs text-dim px-1">
@@ -537,7 +581,10 @@ export function ChatView() {
             {/* Sources after streaming (before the persisted message arrives) */}
             {!sse.streaming && sse.sources.length > 0 && (
               <div className="pl-10">
-                <SourcesDisclosure sources={sse.sources} />
+                <SourcesDisclosure
+                  sources={sse.sources}
+                  cited={citedSourceNumbers(sse.content, sse.sources.length)}
+                />
               </div>
             )}
           </div>

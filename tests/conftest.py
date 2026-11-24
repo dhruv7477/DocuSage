@@ -267,7 +267,9 @@ def rag_service_advanced(
         reranker=mock_reranker,
         query_understanding=mock_query_understanding,
         top_k=5,
-        abstention_threshold=0.0,  # tests don't exercise abstention by default
+        # Never decline: tests don't exercise the answer gate by default.
+        reranker_threshold=0.0,
+        cosine_threshold=0.0,
     )
 
 

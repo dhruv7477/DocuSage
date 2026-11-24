@@ -53,10 +53,14 @@ echo "Engine $arch, commit ${commit:0:12} here and on the server."
 
 log "Build"
 build() {
-  docker build --platform linux/arm64 -f "$1" -t "$2" \
-    --label "org.opencontainers.image.revision=$commit" .
+  local dockerfile=$1 tag=$2
+  shift 2
+  docker build --platform linux/arm64 -f "$dockerfile" -t "$tag" \
+    --label "org.opencontainers.image.revision=$commit" "$@" .
 }
-build docker/Dockerfile docusage-api:demo
+# Today's date reruns the API image's apt-get upgrade instead of reusing a
+# cached layer, so Debian security fixes published since are included.
+build docker/Dockerfile docusage-api:demo --build-arg "APT_UPGRADE_DATE=$(date -u +%F)"
 build docker/Dockerfile.web docusage-web:demo
 
 log "Save and compress"

@@ -26,6 +26,12 @@ Algorithm
    turns the condensed material into a professional, human-friendly
    executive summary. The user's original phrasing steers the focus
    ("summarize the methodology" ≠ "summarize everything").
+
+When full summaries are turned off (DOC_SUMMARY_ENABLED=false, to stay
+within a hosted LLM's limits), `prepare_overview_stream()` answers a
+summary request with ONE call instead: each target document's outline
+(its headings) and opening chunks, packed into the normal answer context
+budget, so it costs about the same as one question.
 """
 
 from __future__ import annotations
@@ -39,7 +45,12 @@ from src.configs.config import get_settings
 from src.core.exceptions import LLMProviderError
 from src.core.logger import get_logger
 from src.models.user import User
-from src.providers.llm.base import BaseLLMProvider, LLMConfig, LLMMessage
+from src.providers.llm.base import (
+    BaseLLMProvider,
+    LLMConfig,
+    LLMMessage,
+    require_text,
+)
 from src.services.prompt_builder import count_tokens
 from src.services.rag_service import CitedSource
 from src.vector_store.base import BaseVectorStore, SearchResult
@@ -64,6 +75,31 @@ Structure:
 Style: professional, informative, human-friendly. No filler, no apologies.
 Do NOT use bracketed citation markers like [1].
 If the user asked about a specific aspect, focus the summary on that aspect."""
+
+_OVERVIEW_SYSTEM_PROMPT = """You are giving a short overview of the user's document(s). For each document you are shown its headings and its opening sections, not the full text.
+
+- Say in one or two sentences what each document is and what it covers, using its headings.
+- Then give a few key points from the opening sections, keeping concrete names, figures, and dates.
+- Do not guess at content you were not shown, and do not say a document lacks something only because these excerpts do not show it.
+- No preamble. Do NOT use bracketed citation markers like [1].
+If the user asked about a specific aspect, focus on that aspect."""
+
+# Shown above every overview, so the reader knows what it covers.
+OVERVIEW_NOTE = (
+    "Short overview: full summaries are turned off in this demo, so this "
+    "covers each document's headings and opening sections.\n\n"
+)
+
+_NO_CONTENT_NOTE = (
+    "I couldn't find any indexed content for the requested "
+    "document(s). Make sure they finished processing, then try again."
+)
+
+# The smallest share of the overview budget worth giving one document; with
+# more documents than fit, the overview covers the first ones.
+_MIN_OVERVIEW_SHARE = 300
+# At most this fraction (1/n) of a document's share goes to its outline.
+_OUTLINE_SHARE = 3
 
 
 @dataclass
@@ -92,6 +128,7 @@ class DocSummaryService:
         max_total_chunks: int | None = None,
         timeout_seconds: float | None = None,
         map_concurrency: int | None = None,
+        overview_token_budget: int | None = None,
     ) -> None:
         self._vector_store = vector_store
         self._llm = llm
@@ -108,6 +145,8 @@ class DocSummaryService:
         self._map_concurrency = max(
             1, map_concurrency or settings.summary_map_concurrency
         )
+        # The overview fills the same context budget as a normal answer.
+        self._overview_budget = overview_token_budget or settings.rag_context_tokens
 
     async def prepare_summary_stream(
         self,
@@ -143,19 +182,7 @@ class DocSummaryService:
             rendered = "\n\n".join(_render_chunk(c) for c in chunks)
             doc_texts.append(f"## {filename}\n\n{rendered}")
 
-            first = chunks[0]
-            outcome.sources.append(
-                CitedSource(
-                    document_id=doc_id,
-                    chunk_id=first.chunk_id,
-                    source_filename=filename,
-                    page_number=first.payload.page_number,
-                    chunk_index=0,
-                    relevance_score=1.0,
-                    heading_path=[],
-                    text="",
-                )
-            )
+            outcome.sources.append(_document_source(doc_id, filename, chunks[0]))
             if chunk_budget <= 0:
                 outcome.truncated = True
                 break
@@ -163,13 +190,7 @@ class DocSummaryService:
         material = "\n\n".join(doc_texts)
         if not material.strip():
             # No chunks at all — stream a graceful note instead of erroring.
-            async def _empty() -> AsyncIterator[str]:
-                yield (
-                    "I couldn't find any indexed content for the requested "
-                    "document(s). Make sure they finished processing, then try again."
-                )
-
-            return outcome, _empty()
+            return outcome, _single(_NO_CONTENT_NOTE)
 
         # ── Map-reduce only if the doc is too big for a single pass ──
         # Material within context_budget streams directly (no map calls) —
@@ -219,20 +240,99 @@ class DocSummaryService:
             truncated=outcome.truncated,
         )
 
-        async def _token_iter() -> AsyncIterator[str]:
-            try:
-                async for token in self._llm.stream(
-                    final_messages, llm_config, timeout=self._timeout
-                ):
-                    yield token
-            except LLMProviderError:
-                raise
-            except Exception as exc:
-                raise LLMProviderError(
-                    "Summary generation failed.", detail=str(exc)
-                ) from exc
+        return outcome, self._stream(final_messages, llm_config, purpose="summary")
 
-        return outcome, _token_iter()
+    async def prepare_overview_stream(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        user: User,
+        documents: list[tuple[str, str]],
+        query: str,
+    ) -> tuple[SummaryOutcome, AsyncIterator[str]]:
+        """
+        A short overview in ONE call, for when full summaries are off.
+
+        Each target document gets an equal share of the answer context
+        budget, filled with its outline (headings, in order) and then its
+        opening chunks. The words of the request are never searched for:
+        "Summary of the document" matches no passage.
+        """
+        ws_id = str(workspace_id)
+        max_docs = max(1, self._overview_budget // _MIN_OVERVIEW_SHARE)
+        targets = list(documents)[:max_docs]
+        outcome = SummaryOutcome(
+            documents=targets, truncated=len(documents) > len(targets)
+        )
+        share = self._overview_budget // max(1, len(targets))
+
+        sections: list[str] = []
+        for doc_id, filename in targets:
+            chunks = await self._vector_store.list_document_chunks(
+                ws_id, doc_id, str(user.id)
+            )
+            if not chunks:
+                continue
+            section, used = _overview_section(filename, chunks, share)
+            sections.append(section)
+            outcome.total_chunks += used
+            outcome.truncated = outcome.truncated or used < len(chunks)
+            outcome.sources.append(_document_source(doc_id, filename, chunks[0]))
+
+        if not sections:
+            return outcome, _single(_NO_CONTENT_NOTE)
+
+        material = "\n\n".join(sections)
+        messages = [
+            LLMMessage(role="system", content=_OVERVIEW_SYSTEM_PROMPT),
+            LLMMessage(
+                role="user",
+                content=f"User request: {query}\n\nMATERIAL:\n{material}",
+            ),
+        ]
+        # The answer limit, not the summary's: a reasoning model counts its
+        # reasoning toward max_tokens, and only generated tokens are billed.
+        llm_config = LLMConfig(
+            temperature=settings.llm_temperature,
+            max_tokens=settings.llm_max_tokens,
+        )
+        log.info(
+            "overview_stream_start",
+            documents=len(sections),
+            chunks=outcome.total_chunks,
+            tokens=count_tokens(material),
+            truncated=outcome.truncated,
+        )
+
+        async def _with_note() -> AsyncIterator[str]:
+            # The note goes out with the first token, so a call that returns
+            # nothing leaves no note above an answer that never came.
+            note = OVERVIEW_NOTE
+            async for token in self._stream(messages, llm_config, purpose="overview"):
+                yield note + token
+                note = ""
+
+        return outcome, _with_note()
+
+    async def _stream(
+        self, messages: list[LLMMessage], llm_config: LLMConfig, *, purpose: str
+    ) -> AsyncIterator[str]:
+        """
+        The final streamed call. Provider errors are made uniform, and an
+        empty answer becomes a retry message (see `require_text`).
+        """
+        try:
+            async for token in require_text(
+                self._llm.stream(messages, llm_config, timeout=self._timeout),
+                purpose=purpose,
+            ):
+                yield token
+        except LLMProviderError:
+            raise
+        except Exception as exc:
+            raise LLMProviderError(
+                "Summary generation failed.", detail=str(exc)
+            ) from exc
 
     async def _map_segments(self, segments: list[str]) -> list[str]:
         """
@@ -272,6 +372,74 @@ class DocSummaryService:
 
 
 # ── Pure helpers ──────────────────────────────────────────────────
+
+
+async def _single(text: str) -> AsyncIterator[str]:
+    """A stream of one fixed piece of text."""
+    yield text
+
+
+def _document_source(doc_id: str, filename: str, first: SearchResult) -> CitedSource:
+    """One source per summarized document, pointing at its first chunk."""
+    return CitedSource(
+        document_id=doc_id,
+        chunk_id=first.chunk_id,
+        source_filename=filename,
+        page_number=first.payload.page_number,
+        chunk_index=0,
+        relevance_score=1.0,
+        heading_path=[],
+        text="",
+    )
+
+
+def _outline(chunks: list[SearchResult], budget: int) -> str:
+    """The document's distinct heading paths, in order, within `budget` tokens."""
+    lines: list[str] = []
+    seen: set[str] = set()
+    total = count_tokens("Headings:")
+    for chunk in chunks:
+        path = " > ".join(chunk.payload.heading_path)
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        line = f"- {path}"
+        cost = count_tokens(line)
+        if total + cost > budget:
+            break
+        lines.append(line)
+        total += cost
+    return "Headings:\n" + "\n".join(lines) if lines else ""
+
+
+def _overview_section(
+    filename: str, chunks: list[SearchResult], budget: int
+) -> tuple[str, int]:
+    """
+    One document's part of an overview: its outline, then its opening
+    chunks, within `budget` tokens. Returns the text and the number of
+    chunks it includes.
+    """
+    parts = [f"## {filename}"]
+    outline = _outline(chunks, budget // _OUTLINE_SHARE)
+    if outline:
+        parts.append(outline)
+    # Each "\n\n" separator costs a token or two; reserve them up front.
+    remaining = budget - count_tokens("\n\n".join(parts)) - 2 * len(chunks)
+    used = 0
+    for chunk in chunks:
+        text = chunk.payload.text
+        cost = count_tokens(text)
+        if cost > remaining:
+            if used == 0 and remaining > 0:
+                # Always show the start of the document, cut to fit.
+                parts.append(_truncate_to_tokens(text, remaining))
+                used = 1
+            break
+        parts.append(text)
+        remaining -= cost
+        used += 1
+    return "\n\n".join(parts), used
 
 
 def _render_chunk(chunk: SearchResult) -> str:

@@ -12,11 +12,44 @@ Methods:
     generate()  → full response as a string (for non-streaming use cases)
     stream()    → async generator of string chunks (for SSE chat responses)
     health()    → lightweight connectivity check (used at startup)
+
+`require_text()` wraps a stream that must produce an answer for the user.
 """
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+
+from src.core.exceptions import LLMProviderError
+from src.core.logger import get_logger
+
+log = get_logger(__name__)
+
+# Shown when a model returns no text at all. A reasoning model (gpt-oss) can
+# spend its whole token budget on reasoning and stream nothing.
+EMPTY_ANSWER_MESSAGE = "That didn't work, please try again."
+
+
+async def require_text(
+    tokens: AsyncIterator[str], *, purpose: str
+) -> AsyncIterator[str]:
+    """
+    Pass a model's streamed tokens through; if none had visible text, log it
+    and raise `LLMProviderError` with a retry message, so the user sees that
+    instead of an empty answer. `purpose` names the stream in the log.
+    """
+    produced_text = False
+    async for token in tokens:
+        produced_text = produced_text or bool(token.strip())
+        yield token
+    if not produced_text:
+        raise empty_answer(purpose)
+
+
+def empty_answer(purpose: str) -> LLMProviderError:
+    """Log an empty model answer and return the error that tells the user to retry."""
+    log.warning("llm_empty_answer", purpose=purpose)
+    return LLMProviderError(EMPTY_ANSWER_MESSAGE)
 
 
 @dataclass

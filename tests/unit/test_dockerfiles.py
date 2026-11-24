@@ -80,3 +80,23 @@ def test_web_rebuilds_the_same_caddy_version_it_runs() -> None:
     built = re.search(r"xcaddy build v([\d.]+)", WEB)
     assert builder and runtime and built
     assert builder.group(1) == runtime.group(1) == built.group(1)
+
+
+def test_api_package_upgrade_reruns_when_given_a_new_date() -> None:
+    """
+    A cached `apt-get upgrade` layer keeps the Debian packages of the day it
+    was built, so security fixes published since are missing although the
+    step exists. The step depends on APT_UPGRADE_DATE, and every build that
+    is scanned or shipped passes today's date, so it reruns.
+    """
+    # The whole RUN instruction, continuation lines included.
+    upgrade = re.search(r"^RUN (?:.*\\\n)*?.*apt-get upgrade", API, flags=re.MULTILINE)
+    assert upgrade, "no apt-get upgrade step"
+    before = API[: upgrade.start()]
+    assert re.search(r"^ARG APT_UPGRADE_DATE\b", before, flags=re.MULTILINE)
+    assert "${APT_UPGRADE_DATE}" in upgrade.group(0)
+
+    scan = (REPO / ".github" / "workflows" / "security.yml").read_text(encoding="utf-8")
+    assert "APT_UPGRADE_DATE=" in scan
+    ship = (REPO / "deploy" / "ship-images.sh").read_text(encoding="utf-8")
+    assert "APT_UPGRADE_DATE=" in ship

@@ -5,7 +5,8 @@ Chat orchestrator — composes the agentic pipeline behind the SSE endpoint.
 
     Question Analyzer (router, 1 small JSON call)
         ├─ off_topic   → router's own reply, streamed in slices
-        ├─ doc_summary → DocSummaryService (map-reduce + exec summary)
+        ├─ doc_summary → DocSummaryService (map-reduce + exec summary, or a
+        │                one-call overview when full summaries are off)
         └─ rag_query   → RAGService (retrieve → rerank → grounded stream)
 
 The orchestrator's job is the "prepare" half: classify, route, and hand
@@ -26,9 +27,9 @@ from src.core.logger import get_logger
 from src.models.user import User
 from src.services.doc_summary_service import DocSummaryService
 from src.services.question_analyzer import (
-    FALLBACK_OFF_TOPIC_REPLY,
     QuestionAnalyzer,
     RouteDecision,
+    decline_reply,
 )
 from src.services.rag_service import CitedSource, RAGService, _results_to_cited
 
@@ -38,11 +39,6 @@ log = get_logger(__name__)
 # reply already exists in full; slicing preserves the streaming feel
 # in the UI without a second LLM call.
 _OFF_TOPIC_SLICE = 40
-
-SUMMARIES_DISABLED_MESSAGE = (
-    "Whole-document summaries are turned off on this server to stay within "
-    "its LLM limits. This answer uses the most relevant passages instead."
-)
 
 
 @dataclass
@@ -104,19 +100,6 @@ class ChatOrchestrator:
         else:
             decision = RouteDecision(intent="rag_query")
 
-        if decision.intent == "doc_summary" and not self._enable_summaries:
-            # A summary costs several LLM calls; answer from the most
-            # relevant passages instead, and say so.
-            decision = RouteDecision(intent="rag_query")
-            emit(
-                {
-                    "type": "warning",
-                    "code": "summaries_disabled",
-                    "message": SUMMARIES_DISABLED_MESSAGE,
-                    "confidence": 1.0,
-                }
-            )
-
         emit({"type": "route", "intent": decision.intent})
         emit({"type": "thinking", "stage": "routing"})
 
@@ -138,6 +121,23 @@ class ChatOrchestrator:
         if decision.intent == "doc_summary":
             emit({"type": "thinking", "stage": "summarizing"})
             targets = _resolve_targets(decision, document_ids, workspace_documents)
+            if not self._enable_summaries:
+                # A full summary costs several LLM calls. Searching for the
+                # request's words instead matches no passage and was always
+                # declined, so give a one-call overview of the documents'
+                # headings and opening chunks; it opens with a note saying so.
+                outcome, token_iter = await self._summary.prepare_overview_stream(
+                    workspace_id=workspace_id,
+                    user=user,
+                    documents=targets,
+                    query=query,
+                )
+                return StreamPlan(
+                    intent="doc_summary",
+                    token_iter=token_iter,
+                    sources=outcome.sources,
+                    allow_citations=False,
+                )
             outcome, token_iter = await self._summary.prepare_summary_stream(
                 workspace_id=workspace_id,
                 user=user,
@@ -150,8 +150,8 @@ class ChatOrchestrator:
                         "type": "warning",
                         "code": "summary_truncated",
                         "message": (
-                            "The document set is very large — the summary covers "
-                            "the first portion of it."
+                            "The document set is very large, so the summary "
+                            "covers only the first part of it."
                         ),
                         "confidence": 1.0,
                     }
@@ -173,19 +173,18 @@ class ChatOrchestrator:
             on_stage=lambda s: emit({"type": "thinking", "stage": s}),
         )
 
-        # Retrieval score = the "is this about the documents?" classifier.
-        # If nothing in the workspace documents is relevant (no results, or
-        # reranker confidence below the abstention threshold), this isn't a
-        # question we can answer from the docs — decline with a fixed reply
-        # instead of generating. The embedding/rerank score measures
-        # doc-relevance directly, so it's far more reliable than a small LLM
-        # intent classifier (which both answered off-topic questions and
-        # wrongly refused real document questions). Tune via ABSTENTION_THRESHOLD.
+        # The answer gate (RAGService._gate): a question that is clearly
+        # unrelated to the workspace documents, low on both the reranker and
+        # the dense cosine, is declined with a fixed reply and no LLM call.
+        # Everything else is answered from the passages, and the grounded
+        # prompt lets the model say the documents don't cover it. Tune via
+        # ABSTENTION_RERANKER_THRESHOLD and ABSTENTION_COSINE_THRESHOLD.
         if self._rag._is_abstaining(outcome):
+            reply = decline_reply(summaries_enabled=self._enable_summaries)
 
             async def _decline() -> AsyncIterator[str]:
-                for i in range(0, len(FALLBACK_OFF_TOPIC_REPLY), _OFF_TOPIC_SLICE):
-                    yield FALLBACK_OFF_TOPIC_REPLY[i : i + _OFF_TOPIC_SLICE]
+                for i in range(0, len(reply), _OFF_TOPIC_SLICE):
+                    yield reply[i : i + _OFF_TOPIC_SLICE]
 
             emit({"type": "route", "intent": "off_topic"})
             return StreamPlan(

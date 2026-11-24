@@ -84,6 +84,9 @@ def _mock_summary() -> MagicMock:
     svc.prepare_summary_stream = AsyncMock(
         return_value=(SummaryOutcome(documents=DOCS), _tokens())
     )
+    svc.prepare_overview_stream = AsyncMock(
+        return_value=(SummaryOutcome(documents=DOCS), _tokens())
+    )
     return svc
 
 
@@ -172,7 +175,10 @@ class TestRouting:
         assert call_kwargs["documents"] == DOCS
 
     @pytest.mark.asyncio
-    async def test_disabled_summaries_answer_from_passages_with_a_warning(self):
+    async def test_disabled_summaries_give_a_one_call_overview(self):
+        # Searching for the words of a summary request matches no passage,
+        # so with full summaries off the request gets a short overview of
+        # the target documents instead of a search, and is never declined.
         summary, rag = _mock_summary(), _mock_rag()
         orch = ChatOrchestrator(
             _analyzer(RouteDecision(intent="doc_summary")),
@@ -181,16 +187,16 @@ class TestRouting:
             enable_router=True,
             enable_summaries=False,
         )
-        plan, events = await _prepare(orch, query="summarize report.pdf")
+        plan, events = await _prepare(orch, query="Summary of the document")
 
+        summary.prepare_overview_stream.assert_awaited_once()
+        assert summary.prepare_overview_stream.call_args.kwargs["documents"] == DOCS
         summary.prepare_summary_stream.assert_not_called()
-        rag.prepare_stream.assert_awaited_once()
-        assert plan.intent == "rag_query"
-        assert plan.allow_citations
-        warnings = [e for e in events if e.get("type") == "warning"]
-        assert [w["code"] for w in warnings] == ["summaries_disabled"]
+        rag.prepare_stream.assert_not_called()
+        assert plan.intent == "doc_summary"
+        assert not plan.allow_citations
         assert [e["intent"] for e in events if e.get("type") == "route"] == [
-            "rag_query"
+            "doc_summary"
         ]
 
     @pytest.mark.asyncio
@@ -214,7 +220,7 @@ class TestRouting:
         # The retrieval score is the "is this about the documents?" classifier:
         # when RAG finds nothing relevant (abstains), the orchestrator declines
         # with the fixed reply instead of generating a "can't find" answer.
-        from src.services.question_analyzer import FALLBACK_OFF_TOPIC_REPLY
+        from src.services.question_analyzer import decline_reply
 
         rag = _mock_rag(abstained=True)
         orch = ChatOrchestrator(
@@ -228,10 +234,27 @@ class TestRouting:
         assert plan.intent == "off_topic"
         assert not plan.allow_citations
         text = "".join([t async for t in plan.token_iter])
-        assert text == FALLBACK_OFF_TOPIC_REPLY
+        assert text == decline_reply(summaries_enabled=True)
         # The route event is corrected to off_topic for the UI.
         intents = [e["intent"] for e in events if e.get("type") == "route"]
         assert "off_topic" in intents
+
+    @pytest.mark.asyncio
+    async def test_decline_offers_no_summary_when_summaries_are_off(self):
+        from src.services.question_analyzer import decline_reply
+
+        orch = ChatOrchestrator(
+            _analyzer(RouteDecision(intent="rag_query")),
+            _mock_rag(abstained=True),
+            _mock_summary(),
+            enable_router=True,
+            enable_summaries=False,
+        )
+        plan, _ = await _prepare(orch, query="what is the capital of france?")
+
+        text = "".join([t async for t in plan.token_iter])
+        assert text == decline_reply(summaries_enabled=False)
+        assert "summary" not in text
 
 
 class TestEmittedEvents:

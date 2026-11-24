@@ -56,6 +56,9 @@ class HybridRetrievalResult:
     sparse_count: int = 0
     fused_count: int = 0
     queries_embedded: int = 0
+    # The best dense cosine. Fusion replaces each result's score with a
+    # rank score, so the answer gate reads the cosine from here.
+    dense_top_score: float = 0.0
 
 
 class HybridRetriever:
@@ -152,6 +155,7 @@ class HybridRetriever:
             sparse_count=len(sparse_results),
             fused_count=len(fused),
             queries_embedded=len(enrichment.queries),
+            dense_top_score=dense_merged[0].score if dense_merged else 0.0,
         )
 
         log.info(

@@ -122,7 +122,8 @@ def _get_rag_service() -> RAGService:
             enable_hyde=_settings.enable_hyde,
         ),
         top_k=_settings.rag_top_k,
-        abstention_threshold=_settings.abstention_threshold,
+        reranker_threshold=_settings.abstention_reranker_threshold,
+        cosine_threshold=_settings.abstention_cosine_threshold,
     )
 
 
@@ -147,6 +148,7 @@ def _get_orchestrator(
             max_tokens=_settings.router_max_tokens,
             use_llm=_settings.router_use_llm,
             llm_timeout_seconds=_settings.router_timeout_seconds,
+            summaries_enabled=_settings.doc_summary_enabled,
         ),
         rag_service=rag_service,
         # Summaries run on a lighter model (see get_summary_llm_provider):
@@ -563,11 +565,6 @@ async def _sse_generator(
         abstained = plan.abstained if plan else True
         intent = plan.intent if plan else "rag_query"
 
-        # Source citations belong to grounded RAG answers only. Summaries
-        # (and off-topic replies) are not per-passage citable, so we neither
-        # persist nor surface sources for them — the UI shows no "sources".
-        display_sources = cited if intent == "rag_query" else []
-
         # ── Phase 3: Validate + persist ───────────────────────────
         yield _sse_event({"type": "thinking", "stage": "validating"})
         result = validate_answer(
@@ -576,6 +573,15 @@ async def _sse_generator(
             abstained=abstained,
             allow_citations=plan.allow_citations if plan else False,
         )
+        # The answer gate sends every question it can't rule out to the
+        # model, so "the documents don't cover this" from the model is a
+        # normal decline, not a problem to warn about.
+        model_declined = result.warning_code == "model_abstained"
+
+        # Source citations belong to grounded RAG answers only. Summaries,
+        # off-topic replies and declines are not per-passage citable, so we
+        # neither persist nor surface sources for them.
+        display_sources = cited if intent == "rag_query" and not model_declined else []
         if result.changed:
             # Frontend replaces the streamed text wholesale.
             yield _sse_event({"type": "answer_final", "content": result.answer})
@@ -603,18 +609,6 @@ async def _sse_generator(
                         "No matching content found in your documents."
                         if code == "no_documents"
                         else "The retrieved context is weak — the answer may be incomplete."
-                    ),
-                    "confidence": round(confidence, 3),
-                }
-            )
-        if result.warning_code == "model_abstained":
-            yield _sse_event(
-                {
-                    "type": "warning",
-                    "code": "model_abstained",
-                    "message": (
-                        "The model declined to answer even though related "
-                        "content was found — try rephrasing the question."
                     ),
                     "confidence": round(confidence, 3),
                 }

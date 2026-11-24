@@ -37,7 +37,12 @@ from src.core.exceptions import LLMProviderError
 from src.core.logger import get_logger
 from src.models.user import User
 from src.providers.embedding.base import BaseEmbeddingProvider
-from src.providers.llm.base import BaseLLMProvider, LLMConfig
+from src.providers.llm.base import (
+    BaseLLMProvider,
+    LLMConfig,
+    empty_answer,
+    require_text,
+)
 from src.retrieval.hybrid import HybridRetriever
 from src.retrieval.query_understanding import QueryEnrichment, QueryUnderstanding
 from src.retrieval.reranker import BaseReranker, NoOpReranker, compute_confidence
@@ -83,6 +88,8 @@ class _RetrievalOutcome:
     results: list[SearchResult]
     confidence: float
     enrichment: QueryEnrichment
+    # The answer gate's verdict: decline without an LLM call (see `_gate`).
+    declined: bool = False
     # The prompt actually sent to the LLM. `prompt.included_results[n-1]`
     # is the chunk behind citation [n] — the orchestrator builds the
     # sources event from this, never from a re-sorted view.
@@ -108,7 +115,8 @@ class RAGService:
         reranker: BaseReranker | None = None,
         query_understanding: QueryUnderstanding | None = None,
         top_k: int | None = None,
-        abstention_threshold: float | None = None,
+        reranker_threshold: float | None = None,
+        cosine_threshold: float | None = None,
     ) -> None:
         self._embedder = embedder
         self._vector_store = vector_store
@@ -125,10 +133,15 @@ class RAGService:
             enable_hyde=settings.enable_hyde,
         )
         self._top_k = top_k or settings.rag_top_k
-        self._abstention_threshold = (
-            abstention_threshold
-            if abstention_threshold is not None
-            else settings.abstention_threshold
+        self._reranker_threshold = (
+            reranker_threshold
+            if reranker_threshold is not None
+            else settings.abstention_reranker_threshold
+        )
+        self._cosine_threshold = (
+            cosine_threshold
+            if cosine_threshold is not None
+            else settings.abstention_cosine_threshold
         )
 
     # ── Non-streaming ────────────────────────────────────────────
@@ -171,6 +184,8 @@ class RAGService:
                 "LLM generation failed.",
                 detail=str(exc),
             ) from exc
+        if not llm_response.content.strip():
+            raise empty_answer("answer")
 
         sources = _extract_sources(outcome.results)
 
@@ -245,7 +260,9 @@ class RAGService:
         )
 
         try:
-            async for token in self._llm.stream(prompt.messages, llm_config):
+            async for token in require_text(
+                self._llm.stream(prompt.messages, llm_config), purpose="answer"
+            ):
                 yield token
         except LLMProviderError:
             raise
@@ -309,7 +326,9 @@ class RAGService:
 
         async def _token_iter() -> AsyncIterator[str]:
             try:
-                async for token in self._llm.stream(prompt.messages, llm_config):
+                async for token in require_text(
+                    self._llm.stream(prompt.messages, llm_config), purpose="answer"
+                ):
                     yield token
             except LLMProviderError:
                 raise
@@ -410,10 +429,39 @@ class RAGService:
             results=reranked,
             confidence=confidence,
             enrichment=enrichment,
+            declined=self._gate(reranked, retrieval.dense_top_score),
         )
 
+    def _gate(self, reranked: list[SearchResult], cosine_top: float) -> bool:
+        """
+        Decide whether to decline without an LLM call, and log the decision.
+
+        The cross-encoder ranks well but scores answers worded unlike the
+        question near zero ("the candidate" against a resume), so it never
+        declines alone: a question is declined only when its top reranker
+        score AND its top dense cosine are both below their cut-offs. The
+        rest goes to the LLM, whose grounded prompt still lets it say the
+        documents don't cover the question. The log carries the scores, not
+        the question, so the cut-offs can be retuned from real traffic.
+        """
+        reranker_top = reranked[0].score if reranked else 0.0
+        declined = not reranked or (
+            reranker_top < self._reranker_threshold
+            and cosine_top < self._cosine_threshold
+        )
+        log.info(
+            "rag_gate",
+            zone="decline" if declined else "llm",
+            reranker_top=round(reranker_top, 4),
+            cosine_top=round(cosine_top, 4),
+            candidates=len(reranked),
+            reranker_threshold=self._reranker_threshold,
+            cosine_threshold=self._cosine_threshold,
+        )
+        return declined
+
     def _is_abstaining(self, outcome: _RetrievalOutcome) -> bool:
-        return not outcome.results or outcome.confidence < self._abstention_threshold
+        return outcome.declined
 
 
 def _results_to_cited(results: list[SearchResult]) -> list[CitedSource]:

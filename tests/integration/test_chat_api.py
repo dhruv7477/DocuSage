@@ -343,8 +343,9 @@ class TestSSEStreamEndpoint:
         assert resp.status_code == 422
 
     @staticmethod
-    def _mock_orchestrator(tokens: list[str]):
+    def _mock_orchestrator(tokens: list[str], sources: list | None = None):
         """Orchestrator whose prepare() emits agentic events then streams tokens."""
+        from src.providers.llm.base import require_text
         from src.services.chat_orchestrator import StreamPlan
 
         orch = MagicMock()
@@ -360,8 +361,9 @@ class TestSSEStreamEndpoint:
 
             return StreamPlan(
                 intent="rag_query",
-                token_iter=_tokens(),
-                sources=[],
+                # As the RAG service streams a model's answer.
+                token_iter=require_text(_tokens(), purpose="answer"),
+                sources=sources or [],
                 confidence=1.0,
                 abstained=False,
                 allow_citations=True,
@@ -371,7 +373,15 @@ class TestSSEStreamEndpoint:
         return orch
 
     def _run_stream(
-        self, test_app, user_id, workspace_id, chat_id, headers, tokens, query="hello"
+        self,
+        test_app,
+        user_id,
+        workspace_id,
+        chat_id,
+        headers,
+        tokens,
+        query="hello",
+        sources=None,
     ):
         """Shared harness: override the FastAPI deps, mock services, GET the stream."""
         from src.api.v1.chat import _get_orchestrator
@@ -387,7 +397,7 @@ class TestSSEStreamEndpoint:
         mock_assistant_msg = MagicMock()
         mock_assistant_msg.id = uuid.uuid4()
 
-        orch = self._mock_orchestrator(tokens)
+        orch = self._mock_orchestrator(tokens, sources)
         mock_db = AsyncMock()
 
         async def _fake_db():
@@ -476,6 +486,64 @@ class TestSSEStreamEndpoint:
         # Validating stage emitted after the token loop.
         stages = [e.get("stage") for e in events if e.get("type") == "thinking"]
         assert "validating" in stages
+
+    def test_empty_answer_shows_a_retry_message(
+        self, test_app, user_id, workspace_id, chat_id, headers
+    ):
+        """
+        A reasoning model can spend its whole token budget thinking and return
+        no text. The user gets a clear retry message instead of an empty
+        bubble, and no answer is saved.
+        """
+        resp = self._run_stream(
+            test_app, user_id, workspace_id, chat_id, headers, tokens=[]
+        )
+        events = [
+            json.loads(line[6:])
+            for line in resp.text.split("\n")
+            if line.startswith("data: ")
+        ]
+        errors = [e for e in events if e.get("type") == "error"]
+        assert [e["message"] for e in errors] == ["That didn't work, please try again."]
+        assert not any(e.get("type") in ("token", "done") for e in events)
+
+    def test_model_decline_shows_no_sources_and_no_warning(
+        self, test_app, user_id, workspace_id, chat_id, headers
+    ):
+        """
+        Questions the gate cannot rule out go to the model, which says when
+        the documents don't cover them. That is a normal decline: no source
+        cards for passages that don't answer it, and no "try rephrasing"
+        warning.
+        """
+        from src.services.prompt_builder import NO_ANSWER_PHRASE
+        from src.services.rag_service import CitedSource
+
+        source = CitedSource(
+            document_id="doc-1",
+            chunk_id="chunk-1",
+            source_filename="i-9.pdf",
+            page_number=1,
+            chunk_index=0,
+            relevance_score=0.3,
+        )
+        resp = self._run_stream(
+            test_app,
+            user_id,
+            workspace_id,
+            chat_id,
+            headers,
+            tokens=[NO_ANSWER_PHRASE],
+            sources=[source],
+        )
+        events = [
+            json.loads(line[6:])
+            for line in resp.text.split("\n")
+            if line.startswith("data: ")
+        ]
+        assert [e["sources"] for e in events if e.get("type") == "sources"] == [[]]
+        assert not [e for e in events if e.get("type") == "warning"]
+        assert any(e.get("type") == "done" for e in events)
 
     def test_stream_commits_user_message_before_generation(
         self, test_app, user_id, workspace_id, chat_id, headers

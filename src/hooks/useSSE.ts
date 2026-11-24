@@ -5,7 +5,6 @@ import type { CitedSource } from '@/api'
 export type WarningCode =
   | 'low_confidence'
   | 'no_documents'
-  | 'model_abstained'
   | 'abstention_mismatch'
   | 'summary_truncated'
   | string
