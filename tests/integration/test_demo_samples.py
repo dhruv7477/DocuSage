@@ -287,6 +287,50 @@ def test_nightly_wipe_removes_uploads_and_keeps_samples(demo_env: dict) -> None:
     assert library_docs == 2
 
 
+def test_refreshing_the_library_updates_every_account_copy(demo_env: dict) -> None:
+    """
+    After a deploy that changes how documents are chunked, re-ingesting the
+    library and copying its vectors again gives accounts that already exist
+    the new chunks too. Uploads are left to the nightly wipe.
+    """
+    from src.workers.demo_tasks import refresh_sample_library_task
+
+    _build_library(demo_env)
+    user_id = _new_user(demo_env["engine"])
+    _run(lambda db: seed_user(db, demo_env["store"], user_id))
+    docs = _user_docs(demo_env["engine"], user_id)
+    handbook = next(d for d in docs if d.original_filename == "handbook.pdf")
+    ws_id, doc_id = str(handbook.workspace_id), str(handbook.id)
+    store = demo_env["store"]
+    # Stand in for chunks made by older code: the copy has none left.
+    runtime.run(store.delete_document_vectors(ws_id, doc_id, str(user_id)))
+    with Session(demo_env["engine"]) as s:
+        s.add(
+            Document(
+                workspace_id=handbook.workspace_id,
+                user_id=user_id,
+                filename="mine.txt",
+                original_filename="mine.txt",
+                file_type=DocumentType.TXT,
+                file_size_bytes=17,
+                storage_path=f"workspaces/{ws_id}/documents/{user_id}/upload/mine.txt",
+                status=DocumentStatus.COMPLETED,
+                chunk_count=7,
+            )
+        )
+        s.commit()
+
+    result = refresh_sample_library_task.apply().get()
+
+    assert result == {"library": 2, "copies": 2}
+    chunks = runtime.run(store.list_document_chunks(ws_id, doc_id, str(user_id)))
+    assert chunks and any(CANARY in c.payload.text for c in chunks)
+    after = {d.original_filename: d for d in _user_docs(demo_env["engine"], user_id)}
+    assert after["handbook.pdf"].status == DocumentStatus.COMPLETED
+    assert after["handbook.pdf"].chunk_count == len(chunks)
+    assert after["mine.txt"].chunk_count == 7  # the upload is untouched
+
+
 def test_library_owner_cannot_sign_in(demo_env: dict) -> None:
     _run(lambda db: ensure_library(db, demo_env["storage"]))
 
@@ -300,6 +344,7 @@ def test_demo_tasks_do_nothing_outside_demo_mode(
 ) -> None:
     from src.workers.demo_tasks import (
         ensure_sample_library_task,
+        refresh_sample_library_task,
         seed_sample_documents_task,
         wipe_user_uploads_task,
     )
@@ -312,4 +357,5 @@ def test_demo_tasks_do_nothing_outside_demo_mode(
             == "disabled"
         )
         assert wipe_user_uploads_task.apply().get() == 0
+        assert refresh_sample_library_task.apply().get() == {"library": 0, "copies": 0}
     rt.run.assert_not_called()
