@@ -138,9 +138,9 @@ class TestSemanticChunker:
         # heading_path is propagated onto the chunk
         assert chunks[0].heading_path == ["Section A"]
         assert chunks[1].heading_path == ["Section B"]
-        # Heading text itself is not duplicated in the chunk content
-        assert "Section A" not in chunks[0].text
-        assert chunks[0].text == "Body of section A."
+        # The heading opens its chunk, so the chunk's own text states it.
+        assert chunks[0].text == "Section A\n\nBody of section A."
+        assert chunks[1].text == "Section B\n\nBody of section B."
 
     def test_embedding_text_prepends_heading_path(self):
         chunker = SemanticChunker(chunk_tokens=100, overlap_tokens=0)
@@ -159,6 +159,107 @@ class TestSemanticChunker:
         )
         chunks = chunker.chunk_document(doc)
         assert chunks[0].embedding_text().startswith("Refunds\n\n")
+
+    def test_a_document_title_heading_is_citable_text(self):
+        """
+        A resume's name is its largest font, so it parses as a heading. It
+        must be in the chunk's own text: that text is what a citation is
+        checked against and what the page image highlights.
+        """
+        chunker = SemanticChunker(chunk_tokens=500, overlap_tokens=0)
+        doc = ParsedDocument(
+            filename="resume.pdf",
+            blocks=[
+                _heading("Talia Brennerholt", level=1, page=1, char_start=0),
+                _para(
+                    "Portland, Oregon | talia.brennerholt@example.com",
+                    page=1,
+                    char_start=18,
+                    heading_path=["Talia Brennerholt"],
+                ),
+            ],
+            total_pages=1,
+        )
+        [chunk] = chunker.chunk_document(doc)
+        assert chunk.text.startswith("Talia Brennerholt\n\n")
+        assert chunk.heading_path == ["Talia Brennerholt"]
+        assert chunk.char_start == 0
+
+    def test_consecutive_headings_open_the_next_chunk_together(self):
+        chunker = SemanticChunker(chunk_tokens=500, overlap_tokens=0)
+        doc = ParsedDocument(
+            filename="resume.pdf",
+            blocks=[
+                _heading("Talia Brennerholt", level=1, char_start=0),
+                _heading(
+                    "Experience",
+                    level=2,
+                    char_start=18,
+                    heading_path=["Talia Brennerholt"],
+                ),
+                _para(
+                    "Senior Data Engineer, Pellwick Freight",
+                    char_start=30,
+                    heading_path=["Talia Brennerholt", "Experience"],
+                ),
+            ],
+            total_pages=1,
+        )
+        [chunk] = chunker.chunk_document(doc)
+        assert chunk.text == (
+            "Talia Brennerholt\n\nExperience\n\nSenior Data Engineer, Pellwick Freight"
+        )
+        assert chunk.heading_path == ["Talia Brennerholt", "Experience"]
+
+    def test_embedding_input_does_not_repeat_the_heading(self):
+        # The embedder already gets the heading path; the heading line in the
+        # text must not change what is embedded (or every cosine shifts).
+        chunker = SemanticChunker(chunk_tokens=100, overlap_tokens=0)
+        doc = ParsedDocument(
+            filename="t.md",
+            blocks=[
+                _heading("Refunds", level=1, page=1, char_start=0),
+                _para(
+                    "All refunds processed within 30 days.",
+                    page=1,
+                    char_start=10,
+                    heading_path=["Refunds"],
+                ),
+            ],
+            total_pages=1,
+        )
+        [chunk] = chunker.chunk_document(doc)
+        assert (
+            chunk.embedding_text() == "Refunds\n\nAll refunds processed within 30 days."
+        )
+
+    def test_headings_move_no_chunk_boundary(self):
+        """
+        Headings do not count toward the token budget, and the overlap is
+        taken from the body: where chunks split, and so what is embedded,
+        stays the same whatever the heading says.
+        """
+
+        def bodies(heading: str) -> list[str]:
+            blocks = [_heading(heading, level=1, char_start=0)]
+            blocks += [
+                _para(
+                    f"Sentence number {i} about pipelines and data quality.",
+                    char_start=100 + 60 * i,
+                    heading_path=[heading],
+                )
+                for i in range(30)
+            ]
+            doc = ParsedDocument(filename="t.pdf", blocks=blocks, total_pages=1)
+            chunker = SemanticChunker(chunk_tokens=60, overlap_tokens=12)
+            return [c.body_text or c.text for c in chunker.chunk_document(doc)]
+
+        short = bodies("Name")
+        long = bodies(
+            "A much longer heading that runs to well over twenty tokens of text"
+        )
+        assert len(short) > 2
+        assert short == long
 
     def test_chunk_carries_char_offsets(self):
         chunker = SemanticChunker(chunk_tokens=200, overlap_tokens=0)
