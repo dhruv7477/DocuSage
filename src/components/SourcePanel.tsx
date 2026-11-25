@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { X, Loader2, AlertTriangle, FileText, ChevronLeft, ChevronRight, Info } from 'lucide-react'
 import { useSourcePanel } from '@/store/source-panel'
 import { usePageImage } from '@/hooks/usePageImage'
+import { highlightChunkId } from './citations'
 
 function isPdf(filename: string): boolean {
   return /\.pdf$/i.test(filename)
@@ -43,7 +44,7 @@ function SourcePanelContent() {
   const { data, isLoading, isError } = usePageImage(
     pdf ? source.document_id : undefined,
     page,
-    page === citedPage ? source?.chunk_id : undefined,
+    page === citedPage && source ? highlightChunkId(source) : undefined,
     2,
   )
 

@@ -4,6 +4,7 @@ import { ExternalLink } from 'lucide-react'
 import type { CitedSource } from '@/api'
 import { useSourcePanel } from '@/store/source-panel'
 import { usePageImage } from '@/hooks/usePageImage'
+import { highlightChunkId } from './citations'
 
 function isPdf(filename: string): boolean {
   return /\.pdf$/i.test(filename)
@@ -14,7 +15,7 @@ function LensThumbnail({ source }: { source: CitedSource }) {
   const { data, isLoading, isError } = usePageImage(
     source.document_id,
     source.page && source.page >= 1 ? source.page : 1,
-    source.chunk_id,
+    highlightChunkId(source),
     1.5,  // thumbnail scale — small + fast
     true, // crop to just the cited passage
   )
@@ -42,6 +43,10 @@ interface CitationLensProps {
   /** Render the trigger as a full-width block (for source-list rows)
    *  instead of an inline chip. */
   block?: boolean
+  /** The source's rank among the answer's passages (1 = most relevant),
+   *  shown instead of the reranker score, which is not calibrated. */
+  rank?: number
+  total?: number
 }
 
 const STOP_WORDS = new Set([
@@ -99,7 +104,7 @@ interface PopoverPos {
   maxHeight: number
 }
 
-export function CitationLens({ source, query, children, block = false }: CitationLensProps) {
+export function CitationLens({ source, query, children, block = false, rank, total }: CitationLensProps) {
   const openSource = useSourcePanel((s) => s.openSource)
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState<PopoverPos | null>(null)
@@ -219,9 +224,11 @@ export function CitationLens({ source, query, children, block = false }: Citatio
             {source.page != null && (
               <span className="font-mono text-2xs text-dim shrink-0">p.{source.page}</span>
             )}
-            <span className="font-mono text-2xs text-dim ml-auto shrink-0">
-              {(source.score * 100).toFixed(0)}%
-            </span>
+            {rank != null && total != null && (
+              <span className="font-mono text-2xs text-dim ml-auto shrink-0">
+                rank {rank} of {total}
+              </span>
+            )}
           </div>
 
           {/* Heading path */}

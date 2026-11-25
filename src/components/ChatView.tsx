@@ -16,7 +16,7 @@ import { useSSE, type StreamWarning } from '@/hooks/useSSE'
 import { useSourcePanel } from '@/store/source-panel'
 import { usePageImage } from '@/hooks/usePageImage'
 import { CitationLens } from './CitationLens'
-import { citedSourceNumbers, normalizeCitations, splitCitations } from './citations'
+import { citedSourceNumbers, highlightChunkId, normalizeCitations, splitCitations } from './citations'
 import { SourcePanel } from './SourcePanel'
 import { ThinkingStatus } from './ThinkingStatus'
 import { MessagesSkeleton } from './Skeletons'
@@ -115,7 +115,7 @@ function SourcePreview({ source }: { source: CitedSource }) {
   const openSource = useSourcePanel((s) => s.openSource)
   const pageNum = source.page && source.page >= 1 ? source.page : 1
   // crop=true → just the highlighted paragraph, not the whole page.
-  const { data, isLoading, isError } = usePageImage(source.document_id, pageNum, source.chunk_id, 2, true)
+  const { data, isLoading, isError } = usePageImage(source.document_id, pageNum, highlightChunkId(source), 2, true)
 
   if (isError) return null
   if (isLoading) {
@@ -152,9 +152,9 @@ function SourcePreview({ source }: { source: CitedSource }) {
 // ── Citation chip ─────────────────────────────────────────────────
 // An inline [n] for source n. Hover or click shows the passage (and a way
 // to open the page) via the CitationLens popover.
-function CitationChip({ n, source, query }: { n: number; source: CitedSource; query?: string }) {
+function CitationChip({ n, total, source, query }: { n: number; total: number; source: CitedSource; query?: string }) {
   return (
-    <CitationLens source={source} query={query}>
+    <CitationLens source={source} query={query} rank={n} total={total}>
       <button
         type="button"
         aria-label={`Source ${n}`}
@@ -174,24 +174,30 @@ function AnswerText({ content, sources, query }: { content: string; sources: Cit
       {splitCitations(content, sources.length).map((part, i) =>
         'text' in part
           ? <span key={i}>{part.text}</span>
-          : <CitationChip key={i} n={part.source} source={sources[part.source - 1]} query={query} />,
+          : <CitationChip key={i} n={part.source} total={sources.length} source={sources[part.source - 1]} query={query} />,
       )}
     </>
   )
 }
 
 // ── Source carousel card ──────────────────────────────────────────
-// `label` is [n] for a cited source, or #rank by similarity. `showPreview`
-// renders the cropped paragraph screenshot (reserved for the first cards).
-// Hover or click reveals the full passage via the CitationLens popover.
+// `label` is [n] for a cited source, or #rank by relevance. `rank` is the
+// source's position among the answer's passages: the reranker's score is not
+// calibrated, so it is not shown as a "% match". `showPreview` renders the
+// cropped paragraph screenshot (reserved for the first cards). Hover or click
+// reveals the full passage via the CitationLens popover.
 function SourceCard({
   source,
   label,
+  rank,
+  total,
   showPreview,
   query,
 }: {
   source: CitedSource
   label: string
+  rank: number
+  total: number
   showPreview: boolean
   query?: string
 }) {
@@ -200,7 +206,7 @@ function SourceCard({
     : null
   return (
     <div className="snap-start shrink-0 w-60">
-      <CitationLens source={source} query={query} block>
+      <CitationLens source={source} query={query} block rank={rank} total={total}>
         <div className="h-full hud-panel rounded-lg p-2.5 cursor-pointer hover:border-teal/40 hover:shadow-teal transition-all group">
           <div className="flex items-center gap-2 text-xs">
             <span className="font-mono text-teal font-bold glow-text shrink-0">{label}</span>
@@ -209,7 +215,7 @@ function SourceCard({
           </div>
           <div className="flex items-center gap-2 mt-0.5 font-mono text-2xs text-dim">
             {source.page != null && <span>p.{source.page}</span>}
-            <span className="ml-auto text-teal/70">{(source.score * 100).toFixed(0)}% match</span>
+            <span className="ml-auto text-teal/70">rank {rank} of {total}</span>
           </div>
           {heading && (
             <p className="font-mono text-2xs text-dim truncate mt-1" title={heading}>{heading}</p>
@@ -224,18 +230,20 @@ function SourceCard({
 // ── Collapsible source carousel ───────────────────────────────────
 // Hidden behind a "Check sources" toggle. When the answer cites sources, it
 // lists exactly those, in the order first cited and under the same [n] as
-// their chips. Otherwise it keeps only the most relevant source(s) by
-// similarity: a single source document → top 2; multiple documents → just
-// the single highest-similarity passage. The first cards show their cropped
-// paragraph screenshot.
+// their chips. Otherwise it keeps only the most relevant source(s): a single
+// source document → top 2; multiple documents → just the top passage. The
+// sources arrive in relevance order (source n backs [n]), so rank is position.
+// The first cards show their cropped paragraph screenshot.
 const PREVIEW_CARDS = 2
 
-function keptSources(sources: CitedSource[], cited: number[]): { source: CitedSource; label: string }[] {
-  if (cited.length) return cited.map((n) => ({ source: sources[n - 1], label: `[${n}]` }))
-  const ranked = [...sources].sort((a, b) => b.score - a.score)
+function keptSources(
+  sources: CitedSource[],
+  cited: number[],
+): { source: CitedSource; label: string; rank: number }[] {
+  if (cited.length) return cited.map((n) => ({ source: sources[n - 1], label: `[${n}]`, rank: n }))
   const distinctDocs = new Set(sources.map((s) => s.document_id)).size
   const keepCount = distinctDocs === 1 ? 2 : 1
-  return ranked.slice(0, keepCount).map((source, i) => ({ source, label: `#${i + 1}` }))
+  return sources.slice(0, keepCount).map((source, i) => ({ source, label: `#${i + 1}`, rank: i + 1 }))
 }
 
 function SourcesDisclosure({
@@ -267,11 +275,13 @@ function SourcesDisclosure({
       </button>
       {open && (
         <div className="mt-1.5 flex gap-2 overflow-x-auto pb-2 snap-x snap-mandatory animate-fade-up">
-          {kept.map(({ source, label }, i) => (
+          {kept.map(({ source, label, rank }, i) => (
             <SourceCard
               key={`${source.document_id}-${source.chunk_id ?? i}`}
               source={source}
               label={label}
+              rank={rank}
+              total={sources.length}
               showPreview={i < PREVIEW_CARDS}
               query={query}
             />

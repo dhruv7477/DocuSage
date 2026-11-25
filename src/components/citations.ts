@@ -4,6 +4,17 @@
  * it rewrote gpt-oss's own form (【3†p.2】).
  */
 
+import type { CitedSource } from '@/api'
+
+/**
+ * The chunk to highlight on a source's page, or undefined to show the plain
+ * page: the server marks a source `highlight: false` when the answer cites it
+ * only for facts its own text does not state.
+ */
+export function highlightChunkId(source: CitedSource): string | undefined {
+  return source.highlight === false ? undefined : source.chunk_id
+}
+
 // The same rules as answer_validator.normalize_citations on the server: a
 // marker that is just numbers, or that carries the dagger, is a citation;
 // other full-width brackets are ordinary CJK punctuation. Bounded lengths
