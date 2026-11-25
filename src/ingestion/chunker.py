@@ -75,6 +75,9 @@ class TextChunk:
     # Populated by the ingestion pipeline once per-chunk UUIDs exist.
     prev_chunk_id: str | None = None
     next_chunk_id: str | None = None
+    # `text` without the headings that open it. The embedder gets the
+    # heading path instead, so the heading lines are left out of its input.
+    body_text: str | None = None
 
     def embedding_text(self) -> str:
         """
@@ -85,9 +88,10 @@ class TextChunk:
         far more usefully when the model also sees that this sits under
         "Section 2 → Acceptable Identity Documents".
         """
+        body = self.text if self.body_text is None else self.body_text
         if self.heading_path:
-            return " > ".join(self.heading_path) + "\n\n" + self.text
-        return self.text
+            return " > ".join(self.heading_path) + "\n\n" + body
+        return body
 
 
 class SemanticChunker:
@@ -146,9 +150,13 @@ class SemanticChunker:
 
             block_tokens = self._token_count(block.text)
 
+            # Headings waiting for their section's first content. They are
+            # never a chunk on their own: they open the next one.
+            lead = current if not _has_body(current) else []
+
             # Tables are emitted as their own chunk regardless of size.
             if block.block_type == "table":
-                if current:
+                if current and not lead:
                     chunks.append(self._flush(current, len(chunks)))
                     current = (
                         self._build_overlap(chunks[-1]) if self._overlap_tokens else []
@@ -156,39 +164,54 @@ class SemanticChunker:
                     current_token_count = sum(
                         self._token_count(b.text) for b in current
                     )
+                    lead = []
                 # If a table itself blows past the budget, we still emit
                 # it as one chunk — slicing tables corrupts them.
                 chunks.append(
-                    self._flush([block], len(chunks), forced_token_count=block_tokens)
+                    self._flush(
+                        [*lead, block],
+                        len(chunks),
+                        forced_token_count=block_tokens,
+                    )
                 )
+                if lead:
+                    current, current_token_count = [], 0
                 continue
 
             # If this block alone exceeds the budget, hard-split it
             # at sentence boundaries; very rare, but defensive.
             if block_tokens > self._chunk_tokens:
-                if current:
+                if current and not lead:
                     chunks.append(self._flush(current, len(chunks)))
-                    current = []
-                    current_token_count = 0
-                for sub in self._split_oversized_block(block):
-                    chunks.append(self._flush([sub], len(chunks)))
+                for i, sub in enumerate(self._split_oversized_block(block)):
+                    chunks.append(
+                        self._flush([*lead, sub] if i == 0 else [sub], len(chunks))
+                    )
+                current, current_token_count = [], 0
                 continue
 
             # Heading boundary: flush whatever's in flight so the next
-            # section starts fresh. The heading text itself is *not*
-            # added to chunk content — the parser already wrote it into
-            # subsequent blocks' `heading_path`, and `embedding_text()`
-            # prepends that path to the chunk on the way to the embedder.
-            # Including the heading block here would duplicate it.
+            # section starts fresh, and open the next chunk with the
+            # heading. Its text is then part of the chunk the model may
+            # cite and the page image highlights (a resume's name is its
+            # largest heading). The embedder still gets it only once,
+            # through the heading path (see `TextChunk.body_text`).
+            # Headings do not count toward the budget, so chunks split where
+            # they did before headings joined their text (and embed the same).
             if block.block_type == "heading":
-                if current:
+                if current and not lead:
                     chunks.append(self._flush(current, len(chunks)))
-                    current = []
-                    current_token_count = 0
+                    current, current_token_count = [], 0
+                current.append(block)
                 continue
 
-            # Budget exceeded → flush, then carry overlap into next chunk
-            if current_token_count + block_tokens > self._chunk_tokens and current:
+            # Budget exceeded → flush, then carry overlap into next chunk.
+            # Leading headings stay with the content that follows them.
+            if (
+                current_token_count + block_tokens > self._chunk_tokens
+                and current
+                and not lead
+            ):
                 chunks.append(self._flush(current, len(chunks)))
                 current = (
                     self._build_overlap(chunks[-1]) if self._overlap_tokens else []
@@ -233,14 +256,16 @@ class SemanticChunker:
     ) -> TextChunk:
         """Build a `TextChunk` from a non-empty list of blocks."""
         text = "\n\n".join(b.text for b in blocks)
+        body = [b for b in blocks if b.block_type != "heading"]
+        body_text = "\n\n".join(b.text for b in body) if body else None
         # Page number: take the modal page across the contributing blocks
         # so a chunk that spans page boundaries reports its center.
         page_number = Counter(b.page_number for b in blocks).most_common(1)[0][0]
 
-        # Heading context comes from the first non-overlap block. If the
-        # chunk's first block IS a heading we include it explicitly so
-        # the embedder gets the title alongside the body.
-        first = blocks[0]
+        # Heading context comes from the first content block, which sits
+        # under every heading that opens the chunk. A chunk of headings
+        # alone (a document that ends on one) uses its first heading.
+        first = body[0] if body else blocks[0]
         heading_path = list(first.heading_path)
         if first.block_type == "heading" and (
             not heading_path or heading_path[-1] != first.text
@@ -261,6 +286,7 @@ class SemanticChunker:
             char_start=blocks[0].char_start,
             char_end=blocks[-1].char_end,
             token_count=token_count,
+            body_text=body_text if body_text != text else None,
         )
 
     def _build_overlap(self, prev_chunk: TextChunk) -> list[ParsedBlock]:
@@ -269,11 +295,14 @@ class SemanticChunker:
         single-block "overlap" containing the last ~`overlap_tokens`
         tokens of the previous chunk's text, sentence-aligned.
         """
-        if self._overlap_tokens == 0 or not prev_chunk.text:
+        # From the body: a heading that opens the previous chunk is not
+        # carried into the next one.
+        body = prev_chunk.text if prev_chunk.body_text is None else prev_chunk.body_text
+        if self._overlap_tokens == 0 or not body:
             return []
         # Encode → keep tail tokens → decode. This gives an exact token
         # count and survives multi-byte / non-Latin scripts cleanly.
-        ids = self._encoder.encode(prev_chunk.text)
+        ids = self._encoder.encode(body)
         tail_ids = ids[-self._overlap_tokens :]
         tail_text = self._encoder.decode(tail_ids).strip()
         if not tail_text:
@@ -321,6 +350,11 @@ class SemanticChunker:
                 )
             )
         return sub_blocks
+
+
+def _has_body(blocks: list[ParsedBlock]) -> bool:
+    """True when the blocks hold content, not only headings."""
+    return any(b.block_type != "heading" for b in blocks)
 
 
 # ── Backward-compat shim ──────────────────────────────────────────

@@ -226,25 +226,62 @@ async def seed_user(
             )
             db.add(copy)
             await db.commit()
-        target = DocumentRef(str(workspace.id), str(copy.id), str(user.id))
-        await vector_store.delete_document_vectors(
-            target.workspace_id, target.document_id, target.user_id
-        )
-        count = await vector_store.copy_document_vectors(
-            DocumentRef(
-                str(library.workspace.id), str(sample.id), str(library.owner.id)
-            ),
-            target,
-        )
-        copy.status = DocumentStatus.COMPLETED
-        copy.chunk_count = count
-        copy.progress = 100
-        copy.error_message = None
+        await _copy_vectors(vector_store, library, sample, copy)
         await db.commit()
         copied_any = True
 
     log.info("samples_seeded", user_id=str(user.id), documents=len(ready))
     return SeedOutcome.SEEDED if copied_any else SeedOutcome.ALREADY_SEEDED
+
+
+async def refresh_sample_copies(db: AsyncSession, vector_store: BaseVectorStore) -> int:
+    """Copy the library's vectors again into every account's sample copies.
+
+    For after the library is re-ingested by newer code (a change to how
+    documents are chunked): accounts that already exist get the new chunks
+    too. Uploads are not touched. Returns the number of copies refreshed, or
+    0 when the library is not fully ingested.
+    """
+    library = await load_library(db)
+    ready = {
+        d.storage_path: d
+        for d in library.documents
+        if d.status == DocumentStatus.COMPLETED
+    }
+    if not ready or len(ready) < len(library.documents):
+        log.warning("sample_copies_not_refreshed", reason="library not ready")
+        return 0
+    copies = list(
+        await db.scalars(
+            select(Document).where(
+                Document.storage_path.in_(list(ready)),
+                Document.user_id != library.owner.id,
+            )
+        )
+    )
+    for copy in copies:
+        await _copy_vectors(vector_store, library, ready[copy.storage_path], copy)
+        await db.commit()
+    log.info("sample_copies_refreshed", copies=len(copies))
+    return len(copies)
+
+
+async def _copy_vectors(
+    vector_store: BaseVectorStore, library: Library, sample: Document, copy: Document
+) -> None:
+    """Replace `copy`'s vectors with the library's for `sample`; mark it complete."""
+    target = DocumentRef(str(copy.workspace_id), str(copy.id), str(copy.user_id))
+    await vector_store.delete_document_vectors(
+        target.workspace_id, target.document_id, target.user_id
+    )
+    count = await vector_store.copy_document_vectors(
+        DocumentRef(str(library.workspace.id), str(sample.id), str(library.owner.id)),
+        target,
+    )
+    copy.status = DocumentStatus.COMPLETED
+    copy.chunk_count = count
+    copy.progress = 100
+    copy.error_message = None
 
 
 # ── Nightly cleanup ───────────────────────────────────────────────

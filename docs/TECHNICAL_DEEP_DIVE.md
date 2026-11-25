@@ -36,7 +36,7 @@ Upload → object storage (raw file) + Document row (PENDING)
 ```
 
 - **Parsers** handle PDF, DOCX (and DOC), TXT, Markdown and HTML.
-- **Chunker** splits text into overlapping passages with heading context preserved (`heading_path`), which later powers precise citations.
+- **Chunker** splits text into overlapping passages with heading context preserved (`heading_path`), which later powers precise citations. A heading also opens the text of the chunk that starts its section, so a fact that lives in a heading (a resume's name) can be cited and highlighted; headings do not count toward the token budget and are left out of the embedding input, which already carries the heading path.
 - **Embedding** turns each chunk into a dense vector (default `BAAI/bge-small-en-v1.5`, 384 dimensions).
 - **Qdrant upsert** writes vectors plus a payload (`document_id`, `user_id`, `page_number`, `text`, `heading_path`, character offsets) and a **full-text payload index** that enables keyword search alongside vector search.
 - Progress and failures are persisted on the `Document` row and surfaced live in the UI. A periodic sweep marks documents stuck in processing as failed, so none stays pending forever.
@@ -71,7 +71,7 @@ The chat path is composed, not monolithic. It implements the **routing workflow*
 
 The orchestrator returns a **`StreamPlan`**: a token iterator plus everything needed after generation (sources in context order, confidence, the abstained flag, and whether `[n]` citations are legitimate).
 
-**Transport (`/chat/{id}/stream`, SSE):** a producer coroutine runs `prepare()` and feeds a queue; the endpoint emits `thinking`, `route`, `token`, `sources`, `warning` and `done` events. An 8-second **keepalive** heartbeat keeps the connection alive during long local-model work. After the last token, `answer_validator` runs **programmatically** (no second LLM pass) to confirm citations are valid and the answer respected the abstention contract; messages are then persisted to PostgreSQL.
+**Transport (`/chat/{id}/stream`, SSE):** a producer coroutine runs `prepare()` and feeds a queue; the endpoint emits `thinking`, `route`, `token`, `sources`, `warning` and `done` events. An 8-second **keepalive** heartbeat keeps the connection alive during long local-model work. After the last token, `answer_validator` runs **programmatically** (no second LLM pass) to confirm citations are valid and the answer respected the abstention contract. Then `citation_grounding` checks each citation against the cited chunk's own text: the prompt shows every chunk's heading path, so a model can cite a chunk for a fact only its heading carries. Such a citation moves to the included chunk whose text states the fact, or, when none does, its source is shown without a highlight. Messages are then persisted to PostgreSQL.
 
 **Grounding and proof:** citations map to context-ordered sources. The `documents/{id}/page-image` endpoint renders the exact PDF page with the cited passage highlighted (PyMuPDF), optionally cropped to just the paragraph: the UI's "Check source" preview.
 

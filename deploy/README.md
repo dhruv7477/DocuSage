@@ -299,6 +299,22 @@ docker compose -f docker/docker-compose.demo.yml up -d --no-build   # on the ser
 
 or build on the server, with the stack stopped as described in [Images](#images). Database migrations run automatically when the API container starts.
 
+### When a release changes how documents are chunked
+
+Then the sample documents need re-ingesting once, after the new containers are up. The pull request says so when it applies (the first one is the release that puts headings into chunk text). Uploads are left alone: the nightly wipe removes them, and new uploads get the new chunks.
+
+```bash
+docker compose -f docker/docker-compose.demo.yml exec worker \
+  celery -A src.workers.celery_app call src.workers.demo_tasks.refresh_sample_library_task
+docker compose -f docker/docker-compose.demo.yml logs -f --since 1m worker | grep sample_library_refresh
+```
+
+The first command prints a task ID and returns. The worker then re-ingests the sample library and copies it again into every account's "Sample documents". The log line `sample_library_refreshed documents=2 copies=N` means it finished; press Ctrl+C to stop following the log. It took 34 seconds on a laptop; allow a few minutes on the t4g.small.
+
+- Run it at a quiet time: while it runs, a question about the samples can find nothing, and new accounts wait for their sample copies.
+- `sample_library_refresh_failed` means a sample failed to ingest. The accounts' copies are not touched then; look at `docker compose -f docker/docker-compose.demo.yml logs worker` and run the command again.
+- Running it again is always safe.
+
 ## Limits and the Groq free tier
 
 The demo defaults are sized for Groq's free tier for `openai/gpt-oss-120b`: about 8K tokens per minute and 200K tokens per day. Check your own limits on the Limits page of the Groq console, because they differ per model and change over time. An answer uses about 3.5K tokens (up to 2.5K of document context, up to 1K of chat history, the prompt and the reply), so the whole demo gets roughly 50 questions a day and 2 a minute.

@@ -13,9 +13,12 @@ from src.core.logger import get_logger
 from src.demo.samples import (
     SeedOutcome,
     ensure_library,
+    load_library,
+    refresh_sample_copies,
     seed_user,
     wipe_user_uploads,
 )
+from src.models.document import DocumentStatus
 from src.workers import runtime
 from src.workers.celery_app import celery_app
 
@@ -70,6 +73,51 @@ def wipe_user_uploads_task() -> int:
     if not get_settings().demo_mode:
         return 0
     return runtime.run(_wipe())
+
+
+@celery_app.task(
+    name="src.workers.demo_tasks.refresh_sample_library_task",
+    # Re-ingests every sample in one run; allow for a slow 2 GB server.
+    soft_time_limit=1800,
+    time_limit=1860,
+)
+def refresh_sample_library_task() -> dict[str, int]:
+    """
+    Re-ingest the sample library with the running code, then copy it again
+    into every account's sample copies. Run once after a deploy that changes
+    how documents are chunked (deploy/README.md, "Update to a new version").
+    Uploads are left to the nightly wipe. If a sample fails to ingest, the
+    copies are not touched.
+    """
+    if not get_settings().demo_mode:
+        return {"library": 0, "copies": 0}
+    from src.workers.tasks import _run_ingestion
+
+    document_ids = runtime.run(_library_document_ids())
+    for document_id in document_ids:
+        result = runtime.run(_run_ingestion(document_id))
+        if result.status != DocumentStatus.COMPLETED:
+            log.error(
+                "sample_library_refresh_failed",
+                document_id=document_id,
+                error=result.error,
+            )
+            raise RuntimeError(f"sample {document_id} failed to ingest: {result.error}")
+    copies = runtime.run(_refresh_copies())
+    log.info("sample_library_refreshed", documents=len(document_ids), copies=copies)
+    return {"library": len(document_ids), "copies": copies}
+
+
+async def _library_document_ids() -> list[str]:
+    async with runtime.session_factory()() as db:
+        return [str(d.id) for d in (await load_library(db)).documents]
+
+
+async def _refresh_copies() -> int:
+    from src.vector_store.factory import get_vector_store
+
+    async with runtime.session_factory()() as db:
+        return await refresh_sample_copies(db, get_vector_store())
 
 
 async def _ensure_library() -> list[str]:

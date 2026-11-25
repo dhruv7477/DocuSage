@@ -25,7 +25,9 @@ its "Sample documents" workspace.
 ## Question set
 
 Each line has `id`, `category`, `workspace`, `doc`, `question`, `note` (the
-expected answer, or why the question must be declined) and `split`.
+expected answer, or why the question must be declined) and `split`. The
+resume's entity lookups (name, role and two dates) also have `answer`: the
+exact text a cited chunk must contain.
 
 | Category | Expected | Count | Examples |
 |---|---|---|---|
@@ -124,9 +126,29 @@ or off-topic questions sent to the summary route (which never declines),
 those sent to the LLM (whose grounded prompt lets it decline; this
 harness cannot see that verdict), and how many questions reach the LLM.
 
+**Citation accuracy.** For each question with an `answer`, the answer must
+be in the text of a chunk the prompt includes. Then a model that cites any
+included chunk for it is simulated: `"<answer> [k]."` for every k, run
+through the app's citation grounding (`src/services/citation_grounding.py`).
+Every resulting citation must point at a chunk whose own text contains the
+answer. This needs no LLM, and catches what the bug on master did: the
+prompt shows each chunk's heading path, so a model can cite any chunk under
+the resume's name heading for the name.
+
 The exit code is 1 on any regression: an LLM call, an error, a false
-decline, or a near-topic or off-topic request sent to the summary route.
-Those are the parts of the decision that need no LLM to check.
+decline, a near-topic or off-topic request sent to the summary route, an
+entity answer that no included chunk states, or a citation that does not
+land on a chunk stating the answer. Those are the parts of the decision that
+need no LLM to check.
+
+| Citation accuracy (entity lookups) | Citations landing on a chunk that states the answer |
+|---|---|
+| Master (citations stay where the model put them) | 5 of 32 |
+| With citation grounding and headings in chunk text | 32 of 32 |
+
+The same four questions asked of gpt-oss-120b through the stream endpoint
+(4 calls): every citation in the final answers points at a chunk that
+states the answer, and its page image highlights it.
 
 ## Baseline on master (ad37336)
 

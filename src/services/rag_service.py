@@ -67,6 +67,10 @@ class CitedSource:
     char_start: int = 0
     char_end: int = 0
     text: str = ""
+    # False when the answer cites this chunk only for facts its own text
+    # does not state (see citation_grounding): its page is shown without
+    # highlighting the chunk.
+    highlight: bool = True
 
 
 @dataclass

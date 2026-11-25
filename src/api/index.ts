@@ -108,6 +108,9 @@ export interface CitedSource {
   char_end?: number
   /** Chunk text — used by the hover lens to show the source passage with query terms highlighted. */
   text?: string
+  /** false when the answer cites this chunk only for facts its own text does
+   *  not state: its page is shown without highlighting the chunk. */
+  highlight?: boolean
 }
 
 export interface QueryResponse {

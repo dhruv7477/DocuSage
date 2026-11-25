@@ -1,7 +1,10 @@
 /**
  * A saved answer's citations: gpt-oss's 【n†p.2】 markers show as clickable
  * [n] chips, and "Check sources" lists exactly the cited sources under the
- * same numbers, so a chip and its source card always match.
+ * same numbers, so a chip and its source card always match. A source shows
+ * its rank among the passages, not the reranker score as a "% match" (the
+ * score is not calibrated), and one the answer cites only for facts its
+ * text lacks is shown without a highlight.
  */
 
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
@@ -26,9 +29,10 @@ const sse = vi.hoisted(() => ({
   dismissNotice: vi.fn(),
 }))
 vi.mock('@/hooks/useSSE', () => ({ useSSE: () => sse }))
-vi.mock('@/hooks/usePageImage', () => ({
-  usePageImage: () => ({ data: undefined, isLoading: false, isError: false }),
-}))
+const pageImage = vi.hoisted(() =>
+  vi.fn((..._args: unknown[]) => ({ data: undefined, isLoading: false, isError: false })),
+)
+vi.mock('@/hooks/usePageImage', () => ({ usePageImage: pageImage }))
 
 // vi.mock factories run before the file's other code, so the fixtures
 // they return are built in vi.hoisted.
@@ -60,8 +64,9 @@ const { MESSAGES } = vi.hoisted(() => {
       role: 'assistant',
       content: 'Within three business days【1†p.2】【3†p.2】.',
       token_count: null,
-      // Source 2 has the highest score but is not cited.
-      sources: [source(1, 0.5), source(2, 0.99), source(3, 0.4)],
+      // Source 2 has the highest score but is not cited. Source 3 is cited
+      // for a fact its own text lacks, so it is shown without a highlight.
+      sources: [source(1, 0.5), source(2, 0.99), { ...source(3, 0.4), highlight: false }],
       created_at: '2026-11-23T10:00:05Z',
     },
   ]
@@ -121,5 +126,37 @@ describe('citations in a saved answer', () => {
     expect(screen.getAllByText('[1]')).toHaveLength(2)
     expect(screen.getAllByText('[3]')).toHaveLength(2)
     expect(screen.queryByText('[2]')).toBeNull()
+  })
+})
+
+describe('source cards', () => {
+  it('show the rank among the passages, not a percentage', async () => {
+    await renderAnswer()
+    fireEvent.click(screen.getByRole('button', { name: /Check sources/ }))
+
+    expect(screen.getByText('rank 1 of 3')).toBeInTheDocument()
+    expect(screen.getByText('rank 3 of 3')).toBeInTheDocument()
+    expect(document.body.textContent).not.toMatch(/\d+% match/)
+  })
+
+  it('show the rank in the passage popover too', async () => {
+    await renderAnswer()
+    fireEvent.mouseEnter(screen.getByRole('button', { name: 'Source 1' }))
+
+    const popover = await screen.findByRole('dialog')
+    expect(popover).toHaveTextContent('rank 1 of 3')
+    expect(popover.textContent).not.toMatch(/\d+%/)
+  })
+
+  it('show a source cited for facts its text lacks without a highlight', async () => {
+    pageImage.mockClear()
+    await renderAnswer()
+    fireEvent.click(screen.getByRole('button', { name: /Check sources/ }))
+
+    const calls = pageImage.mock.calls as unknown[][]
+    // [1] is highlighted on its page; [3] is shown as the plain page.
+    expect(calls).toContainEqual(['doc-1', 1, 'chunk-1', 2, true])
+    expect(calls).toContainEqual(['doc-1', 3, undefined, 2, true])
+    expect(calls).not.toContainEqual(['doc-1', 3, 'chunk-3', 2, true])
   })
 })

@@ -48,3 +48,18 @@ def test_no_em_or_en_dashes(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     lines = [n for n, line in enumerate(text.splitlines(), 1) if DASHES.search(line)]
     assert not lines, f"{path.name}: em or en dash on lines {lines}"
+
+
+# A Celery task by its registered name, as the deploy guide's commands use it.
+TASK_NAME = re.compile(r"\bsrc\.workers\.\w+\.\w+_task\b")
+
+
+def test_tasks_named_in_the_deploy_guide_exist() -> None:
+    """A renamed task must not leave a deploy command that calls nothing."""
+    from src.workers.celery_app import celery_app
+
+    celery_app.loader.import_default_modules()  # registers the included tasks
+    guide = (ROOT / "deploy" / "README.md").read_text(encoding="utf-8")
+    named = set(TASK_NAME.findall(guide))
+    assert "src.workers.demo_tasks.refresh_sample_library_task" in named
+    assert named <= set(celery_app.tasks), named - set(celery_app.tasks)
