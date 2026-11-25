@@ -545,6 +545,77 @@ class TestSSEStreamEndpoint:
         assert not [e for e in events if e.get("type") == "warning"]
         assert any(e.get("type") == "done" for e in events)
 
+    def _grounded_stream(
+        self, test_app, user_id, workspace_id, chat_id, headers, tokens
+    ):
+        from src.services.rag_service import CitedSource
+
+        def source(n: int, text: str) -> CitedSource:
+            return CitedSource(
+                document_id="doc-1",
+                chunk_id=f"chunk-{n}",
+                source_filename="resume.pdf",
+                page_number=n,
+                chunk_index=n,
+                relevance_score=0.0,
+                text=text,
+            )
+
+        resp = self._run_stream(
+            test_app,
+            user_id,
+            workspace_id,
+            chat_id,
+            headers,
+            tokens=tokens,
+            query="What is the name of the candidate?",
+            sources=[
+                source(1, "AWS Certified Data Engineer, Associate (2024)"),
+                source(2, "Sincerely,\n\nTalia Brennerholt"),
+            ],
+        )
+        return [
+            json.loads(line[6:])
+            for line in resp.text.split("\n")
+            if line.startswith("data: ")
+        ]
+
+    def test_a_citation_moves_to_the_chunk_whose_text_states_the_fact(
+        self, test_app, user_id, workspace_id, chat_id, headers
+    ):
+        """
+        The model sees each chunk's heading path, so it can cite a chunk for
+        a fact only the heading carries (a resume's name heads every chunk).
+        The answer is corrected to cite the chunk whose own text has it.
+        """
+        events = self._grounded_stream(
+            test_app,
+            user_id,
+            workspace_id,
+            chat_id,
+            headers,
+            ["Talia Brennerholt [1]."],
+        )
+        finals = [e["content"] for e in events if e.get("type") == "answer_final"]
+        assert finals == ["Talia Brennerholt [2]."]
+        [sources] = [e["sources"] for e in events if e.get("type") == "sources"]
+        assert [s["highlight"] for s in sources] == [True, True]
+
+    def test_an_unsupported_citation_is_shown_without_a_highlight(
+        self, test_app, user_id, workspace_id, chat_id, headers
+    ):
+        events = self._grounded_stream(
+            test_app,
+            user_id,
+            workspace_id,
+            chat_id,
+            headers,
+            ["She speaks Portuguese [1]."],
+        )
+        assert not [e for e in events if e.get("type") == "answer_final"]
+        [sources] = [e["sources"] for e in events if e.get("type") == "sources"]
+        assert [s["highlight"] for s in sources] == [False, True]
+
     def test_stream_commits_user_message_before_generation(
         self, test_app, user_id, workspace_id, chat_id, headers
     ):

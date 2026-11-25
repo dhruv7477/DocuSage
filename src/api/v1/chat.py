@@ -57,6 +57,7 @@ from src.schemas.chat import (
     UpdateChatTitleRequest,
 )
 from src.services.answer_validator import validate_answer
+from src.services.citation_grounding import ground_sources
 from src.services.chat_orchestrator import ChatOrchestrator, StreamPlan
 from src.services.chat_service import ChatService
 from src.services.quota_service import QuotaService
@@ -580,15 +581,21 @@ async def _sse_generator(
 
         # Source citations belong to grounded RAG answers only. Summaries,
         # off-topic replies and declines are not per-passage citable, so we
-        # neither persist nor surface sources for them.
-        display_sources = cited if intent == "rag_query" and not model_declined else []
-        if result.changed:
+        # neither persist nor surface sources for them. A RAG answer's
+        # citations are checked against each chunk's own text: one cited
+        # only for what its heading says moves to a chunk that states it.
+        final_answer, display_sources = result.answer, []
+        if intent == "rag_query" and not model_declined:
+            final_answer, display_sources = ground_sources(
+                result.answer, cited, question=query
+            )
+        if final_answer != "".join(full_answer_parts):
             # Frontend replaces the streamed text wholesale.
-            yield _sse_event({"type": "answer_final", "content": result.answer})
+            yield _sse_event({"type": "answer_final", "content": final_answer})
 
         assistant_msg = await chat_service.save_assistant_message(
             chat_id=chat_id,
-            content=result.answer,
+            content=final_answer,
             sources=display_sources,
         )
 
@@ -629,6 +636,7 @@ async def _sse_generator(
                         "char_start": s.char_start,
                         "char_end": s.char_end,
                         "text": s.text,
+                        "highlight": s.highlight,
                     }
                     for s in display_sources
                 ],

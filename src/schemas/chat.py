@@ -45,6 +45,9 @@ class CitedSourceResponse(BaseModel):
     char_start: int = 0
     char_end: int = 0
     text: str = ""
+    # False: the answer cites this chunk for facts its text does not state,
+    # so its page is shown without a highlight.
+    highlight: bool = True
 
     model_config = {"extra": "ignore"}
 

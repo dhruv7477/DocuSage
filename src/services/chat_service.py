@@ -162,6 +162,7 @@ class ChatService:
                     "char_start": getattr(s, "char_start", 0),
                     "char_end": getattr(s, "char_end", 0),
                     "text": getattr(s, "text", "") or "",
+                    "highlight": getattr(s, "highlight", True),
                 }
                 for s in sources
             ]
