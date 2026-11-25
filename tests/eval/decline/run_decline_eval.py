@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 import time
 import uuid
@@ -46,6 +47,7 @@ from src.core.logger import configure_logging
 from src.db.session import AsyncSessionLocal
 from src.models.document import Document, DocumentStatus
 from src.models.user import User
+from src.services.citation_grounding import ground_citations
 from src.models.workspace import Workspace
 from src.providers.llm import factory as llm_factory
 from src.providers.llm.base import BaseLLMProvider, LLMConfig, LLMMessage, LLMResponse
@@ -182,6 +184,8 @@ class Question:
     doc: str | None = None
     note: str = ""
     split: str = "tune"  # tune | holdout (stratified by category, drawn once)
+    # Entity lookups: the exact text a cited chunk must contain.
+    answer: str | None = None
 
     @property
     def expected(self) -> str:
@@ -251,6 +255,10 @@ class Result:
     top_dense: float | None
     seconds: float
     error: str = ""
+    # Citation accuracy, for questions with an `answer` (see check_citations).
+    answer_in_context: bool | None = None
+    citations_checked: int = 0
+    citation_misses: list[int] = field(default_factory=list)
 
     @property
     def correct(self) -> bool:
@@ -270,6 +278,7 @@ async def evaluate(
     probe.reset()
     started = time.perf_counter()
     intent, error = "", ""
+    citations: tuple[bool | None, int, list[int]] = (None, 0, [])
     try:
         plan = await orchestrator.prepare(
             query=question.question,
@@ -281,6 +290,8 @@ async def evaluate(
             emit=emit,
         )
         intent = plan.intent
+        if question.answer and intent == "rag_query":
+            citations = check_citations(question, [s.text for s in plan.sources])
         await _close(plan.token_iter)
     except Exception as exc:  # reported per question, never hidden
         error = f"{type(exc).__name__}: {exc}"
@@ -308,7 +319,38 @@ async def evaluate(
         top_dense=max(probe.dense_scores) if probe.dense_scores else None,
         seconds=round(elapsed, 2),
         error=error,
+        answer_in_context=citations[0],
+        citations_checked=citations[1],
+        citation_misses=citations[2],
     )
+
+
+def check_citations(
+    question: Question, source_texts: list[str]
+) -> tuple[bool, int, list[int]]:
+    """
+    Citation accuracy with no LLM call. The answer must be in an included
+    chunk's own text, and a model that cites ANY included chunk for it
+    (simulated as "<answer> [k].", k = 1..n) must end up, after the app's
+    citation grounding, citing only chunks whose text contains the answer.
+    Returns (answer in context, citations checked, k values that missed).
+    """
+    answer = question.answer or ""
+    holds = [_contains(text, answer) for text in source_texts]
+    misses: list[int] = []
+    for k in range(1, len(source_texts) + 1):
+        grounded = ground_citations(
+            f"{answer} [{k}].", source_texts, question=question.question
+        )
+        cited = [int(n) for n in re.findall(r"\[(\d+)\]", grounded.answer)]
+        if not cited or not all(holds[n - 1] for n in cited):
+            misses.append(k)
+    return any(holds), len(source_texts), misses
+
+
+def _contains(text: str, answer: str) -> bool:
+    """Case- and whitespace-insensitive substring test."""
+    return " ".join(answer.lower().split()) in " ".join(text.lower().split())
 
 
 async def _close(token_iter: Any) -> None:
@@ -349,6 +391,20 @@ def print_report(results: list[Result], llm_calls: list[str]) -> None:
         ("holdout", lambda r: r.split == "holdout"),
     ):
         _print_summary(label, [r for r in results if keep(r)])
+    checked = [r for r in results if r.citations_checked]
+    if checked:
+        total = sum(r.citations_checked for r in checked)
+        missed = sum(len(r.citation_misses) for r in checked)
+        print(
+            f"\nCitation accuracy (entity lookups, every included chunk cited in "
+            f"turn): {total - missed} of {total} citations land on a chunk that "
+            f"states the answer"
+        )
+        for r in checked:
+            print(
+                f"  {r.id}: answer in context: {r.answer_in_context}, "
+                f"missed citations: {r.citation_misses or 'none'}"
+            )
     errors = sum(r.outcome == "error" for r in results)
     print(f"\nErrors: {errors}   LLM calls attempted: {len(llm_calls)}")
     if llm_calls:
@@ -414,6 +470,13 @@ def regressions(results: list[Result]) -> list[str]:
             found.append(f"{r.id}: an answerable question was declined: {r.question}")
         elif r.expected == "decline" and r.intent == SUMMARY_INTENT:
             found.append(f"{r.id}: sent to the summary route: {r.question}")
+        if r.answer_in_context is False:
+            found.append(f"{r.id}: no included chunk states the answer")
+        elif r.citation_misses:
+            found.append(
+                f"{r.id}: citations to {r.citation_misses} do not land on a chunk "
+                f"that states the answer"
+            )
     return found
 
 
