@@ -59,6 +59,10 @@ class HybridRetrievalResult:
     # The best dense cosine. Fusion replaces each result's score with a
     # rank score, so the answer gate reads the cosine from here.
     dense_top_score: float = 0.0
+    # True when dense search returned fewer hits than it asked for, so
+    # `results` holds every chunk the filter allows (the whole workspace,
+    # or the selected documents).
+    complete: bool = False
 
 
 class HybridRetriever:
@@ -156,6 +160,7 @@ class HybridRetriever:
             fused_count=len(fused),
             queries_embedded=len(enrichment.queries),
             dense_top_score=dense_merged[0].score if dense_merged else 0.0,
+            complete=any(len(dl) < self._candidate_k for dl in dense_results),
         )
 
         log.info(
@@ -166,6 +171,7 @@ class HybridRetriever:
             sparse=result.sparse_count,
             fused=result.fused_count,
             queries=result.queries_embedded,
+            complete=result.complete,
         )
         return result
 

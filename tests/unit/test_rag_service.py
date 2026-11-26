@@ -18,6 +18,7 @@ from src.providers.llm.base import EMPTY_ANSWER_MESSAGE, LLMResponse
 from src.retrieval.hybrid import HybridRetriever
 from src.retrieval.query_understanding import QueryEnrichment
 from src.retrieval.reranker import BaseReranker, NoOpReranker
+from src.services.prompt_builder import PromptBuilder
 from src.services.rag_service import RAGService, _extract_sources
 from src.vector_store.base import SearchResult, VectorPayload
 
@@ -315,7 +316,8 @@ def _gated_service(
         embedder=embedder,
         vector_store=store,
         llm=llm,
-        retriever=HybridRetriever(embedder=embedder, vector_store=store, candidate_k=5),
+        # A full candidate list (1 of 1): a workspace too big to be small.
+        retriever=HybridRetriever(embedder=embedder, vector_store=store, candidate_k=1),
         reranker=_FixedReranker([reranker_top]),
         query_understanding=query_understanding,
         reranker_threshold=0.5,
@@ -403,6 +405,7 @@ class TestAnswerGate:
             "reranker_top": 0.0,
             "cosine_top": 0.55,
             "candidates": 1,
+            "small_workspace": False,
             "reranker_threshold": 0.5,
             "cosine_threshold": 0.48,
         }
@@ -412,3 +415,177 @@ class TestAnswerGate:
         settings = Settings()
         assert settings.abstention_reranker_threshold == 0.5
         assert settings.abstention_cosine_threshold == 0.48
+
+
+def _chunk(
+    doc_id: str, index: int, text: str = "", cosine: float = 0.5
+) -> SearchResult:
+    return SearchResult(
+        chunk_id=f"{doc_id}#{index}",
+        score=cosine,
+        payload=VectorPayload(
+            user_id="user-1",
+            workspace_id="ws-1",
+            document_id=doc_id,
+            chunk_index=index,
+            text=text or f"Passage {index} of {doc_id}.",
+            source=f"{doc_id}.pdf",
+            page_number=index + 1,
+        ),
+    )
+
+
+class _ScoredReranker(BaseReranker):
+    """Scores each candidate by chunk id (0.0 when unlisted), best first."""
+
+    def __init__(self, scores: dict[str, float]) -> None:
+        self._scores = scores
+
+    async def rerank(self, query, results, top_k):
+        scored = [
+            SearchResult(
+                chunk_id=r.chunk_id,
+                score=self._scores.get(r.chunk_id, 0.0),
+                payload=r.payload,
+            )
+            for r in results
+        ]
+        return sorted(scored, key=lambda r: r.score, reverse=True)[:top_k]
+
+
+def _workspace_service(
+    embedder,
+    store,
+    llm,
+    query_understanding,
+    chunks,
+    *,
+    scores=None,
+    candidate_k=20,
+    context_tokens=2500,
+):
+    store.search.return_value = chunks
+    return RAGService(
+        embedder=embedder,
+        vector_store=store,
+        llm=llm,
+        prompt_builder=PromptBuilder(max_context_tokens=context_tokens),
+        retriever=HybridRetriever(
+            embedder=embedder, vector_store=store, candidate_k=candidate_k
+        ),
+        reranker=_ScoredReranker(scores or {}),
+        query_understanding=query_understanding,
+        top_k=3,
+        reranker_threshold=0.5,
+        cosine_threshold=0.48,
+    )
+
+
+class TestSmallWorkspace:
+    """
+    When retrieval returns every chunk the user can search and they all fit
+    the prompt, each document's first chunk joins the context (a resume's
+    name is in its first chunk, and the reranker scores "the name of the
+    candidate" near zero everywhere), and the gate leaves the decision to
+    the LLM.
+    """
+
+    @staticmethod
+    def _two_documents(cosine: float = 0.5) -> list[SearchResult]:
+        return [
+            _chunk(d, i, cosine=cosine) for d in ("doc-a", "doc-b") for i in range(5)
+        ]
+
+    @pytest.mark.asyncio
+    async def test_each_documents_first_chunk_joins_the_context(
+        self, mock_embedder, mock_vector_store, mock_llm, mock_query_understanding
+    ):
+        # The first chunks rank last on the reranker, outside the top 3.
+        scores = {"doc-a#3": 0.9, "doc-b#2": 0.8, "doc-a#1": 0.7, "doc-b#4": 0.6}
+        svc = _workspace_service(
+            mock_embedder,
+            mock_vector_store,
+            mock_llm,
+            mock_query_understanding,
+            self._two_documents(),
+            scores=scores,
+        )
+        outcome, _ = await svc.prepare_stream("Name?", uuid.uuid4(), _make_user())
+        included = [r.chunk_id for r in outcome.prompt.included_results]
+        assert included == ["doc-a#3", "doc-b#2", "doc-a#1", "doc-a#0", "doc-b#0"]
+        assert outcome.small_workspace is True
+
+    @pytest.mark.asyncio
+    async def test_a_first_chunk_already_in_the_top_is_not_repeated(
+        self, mock_embedder, mock_vector_store, mock_llm, mock_query_understanding
+    ):
+        chunks = [_chunk("doc-a", i) for i in range(5)]
+        svc = _workspace_service(
+            mock_embedder,
+            mock_vector_store,
+            mock_llm,
+            mock_query_understanding,
+            chunks,
+            scores={"doc-a#0": 0.9, "doc-a#1": 0.8, "doc-a#2": 0.7},
+        )
+        outcome, _ = await svc.prepare_stream("Name?", uuid.uuid4(), _make_user())
+        assert [r.chunk_id for r in outcome.results] == [
+            "doc-a#0",
+            "doc-a#1",
+            "doc-a#2",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_low_scores_go_to_the_llm(
+        self, mock_embedder, mock_vector_store, mock_llm, mock_query_understanding
+    ):
+        svc = _workspace_service(
+            mock_embedder,
+            mock_vector_store,
+            mock_llm,
+            mock_query_understanding,
+            self._two_documents(cosine=0.45),
+        )
+        with patch("src.services.rag_service.log") as log:
+            outcome, _ = await svc.prepare_stream("Name?", uuid.uuid4(), _make_user())
+        assert not svc._is_abstaining(outcome)
+        [gate] = [c for c in log.info.call_args_list if c.args[0] == "rag_gate"]
+        assert (gate.kwargs["zone"], gate.kwargs["small_workspace"]) == ("llm", True)
+
+    @pytest.mark.asyncio
+    async def test_a_full_candidate_list_is_not_small(
+        self, mock_embedder, mock_vector_store, mock_llm, mock_query_understanding
+    ):
+        # Ten hits for ten asked: there may be more chunks than were returned.
+        svc = _workspace_service(
+            mock_embedder,
+            mock_vector_store,
+            mock_llm,
+            mock_query_understanding,
+            self._two_documents(cosine=0.45),
+            candidate_k=10,
+        )
+        outcome, _ = await svc.prepare_stream("Name?", uuid.uuid4(), _make_user())
+        assert outcome.small_workspace is False
+        assert len(outcome.results) == 3
+        assert svc._is_abstaining(outcome)
+
+    @pytest.mark.asyncio
+    async def test_chunks_that_do_not_fit_the_prompt_are_not_small(
+        self, mock_embedder, mock_vector_store, mock_llm, mock_query_understanding
+    ):
+        long_text = "word " * 120
+        chunks = [
+            _chunk("doc-a", i, text=f"{i} {long_text}", cosine=0.45) for i in range(5)
+        ]
+        svc = _workspace_service(
+            mock_embedder,
+            mock_vector_store,
+            mock_llm,
+            mock_query_understanding,
+            chunks,
+            context_tokens=300,
+        )
+        outcome, _ = await svc.prepare_stream("Name?", uuid.uuid4(), _make_user())
+        assert outcome.small_workspace is False
+        assert svc._is_abstaining(outcome)

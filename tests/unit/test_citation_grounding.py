@@ -8,13 +8,15 @@ heads every chunk); a heading path is never evidence. Such a citation
 moves to an included chunk whose text has the fact, or is dropped. An
 answer whose claims about the documents have no support says the answer
 is not in the documents; an answer with no citations is general knowledge
-and carries a "Not from your documents" label and no sources.
+and carries a "Not from your documents" label and no sources. A claim that
+loses every citation it had stays, and the answer gets a note.
 """
 
 import pytest
 
 from src.services.citation_grounding import (
     NOT_FROM_DOCUMENTS,
+    PARTS_UNLINKED,
     finalize_rag_answer,
     ground_citations,
 )
@@ -261,3 +263,29 @@ class TestFinalizeRagAnswer:
             [],
             None,
         )
+
+    def test_a_claim_that_lost_its_citations_gets_a_note(self):
+        final = finalize_rag_answer(
+            "She is AWS Certified [1]. She speaks Portuguese [1].",
+            self._sources(),
+            question="Tell me about her.",
+        )
+        assert final.answer == "She is AWS Certified [1]. She speaks Portuguese."
+        assert final.label == PARTS_UNLINKED == "parts_unlinked"
+        assert len(final.sources) == 3
+
+    def test_a_sentence_never_cited_gets_no_note(self):
+        final = finalize_rag_answer(
+            "She is AWS Certified [1]. She would be a strong hire.",
+            self._sources(),
+            question="Tell me about her.",
+        )
+        assert final.label is None
+
+    def test_a_dropped_duplicate_leaves_its_claim_linked(self):
+        # [3] moves to [2], which the claim already cites: nothing is unlinked.
+        final = finalize_rag_answer(
+            "Talia Brennerholt [2][3].", self._sources(), question=NAME_QUESTION
+        )
+        assert final.answer == "Talia Brennerholt [2]."
+        assert final.label is None

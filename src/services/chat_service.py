@@ -146,7 +146,7 @@ class ChatService:
         """
         Persist an assistant turn to the messages table.
         Sources are serialised as JSON for display in the UI; `label` is
-        the answer's label ("not_from_documents"), if any.
+        the answer's label ("not_from_documents", "parts_unlinked"), if any.
         """
         # Persist the enriched citation shape so the UI can render
         # heading paths and (eventually) link to the exact passage on a

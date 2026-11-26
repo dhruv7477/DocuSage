@@ -15,7 +15,7 @@ and fails on any regression (below).
 | `make_resume_pdf.py` | Builds both synthetic resumes with PyMuPDF. |
 | `resume_talia_brennerholt.pdf` | A two-page synthetic resume: a cover letter, then the resume. The person, companies, school and addresses are invented; emails use example.com. The name is in the largest font, so the PDF parser makes it a heading, as with a real resume. |
 | `resume_rosalind_kettleborne.pdf` | A three-page synthetic resume whose name appears only as its top heading and on page 1 (17 chunks). Page 2 has a fact stated only in a heading: "First place, Riverbend Data Jam 2024" is a subheading under Hackathons. |
-| `questions.jsonl` | 54 labelled questions in six categories (below). |
+| `questions.jsonl` | 56 labelled questions in six categories (below). |
 | `setup_account.py` | Creates the eval account through the HTTP API, uploads each resume into its own workspace, and waits for ingestion and the sample copies. |
 | `run_decline_eval.py` | The harness. |
 
@@ -27,13 +27,13 @@ its "Sample documents" workspace.
 
 Each line has `id`, `category`, `workspace`, `doc`, `question`, `note` (the
 expected answer, or why the question must be declined) and `split`.
-Fourteen specific questions also have `answer`: the exact text a cited
-chunk must contain (names, a role, dates, tools, a school, a phone number).
+Sixteen questions also have `answer`: the exact text a cited chunk must
+contain (names, a role, dates, tools, a school, a phone number, a talk).
 
 | Category | Expected | Count | Examples |
 |---|---|---|---|
-| `answerable_specific` | answer | 20 | Entity lookups ("What is the name of the candidate?", "When is the candidate available to start?"), lists ("Which documents are mentioned in this?"), facts ("When must an employer complete Section 2 of Form I-9?") |
-| `answerable_vague` | answer | 8 | "Who is this person?", "What is this framework for?" |
+| `answerable_specific` | answer | 21 | Entity lookups ("What is the name of the candidate?", "When is the candidate available to start?"), lists ("Which documents are mentioned in this?"), facts ("When must an employer complete Section 2 of Form I-9?") |
+| `answerable_vague` | answer | 9 | "Who is this person?", "What is this framework for?", "Tell me about the candidate." |
 | `summary` | answer | 8 | "Summary of the document", "TL;DR", "What are the main takeaways from these documents?" |
 | `near_topic` | decline | 9 | "What is Canada's equivalent of Form I-9?", "What salary is Corvantis Labs offering for this role?" |
 | `off_topic` | decline | 8 | "Summarize the plot of Hamlet", "What do they call a baby kangaroo?" |
@@ -145,11 +145,17 @@ under the resume's name heading for the name.
 cites nothing must be shown with the "Not from your documents" label and
 no sources.
 
+**Cost and small workspaces.** For each question that reaches the answer
+LLM, the harness reports the prompt's estimated tokens (the app's
+tiktoken count) per workspace. In a small workspace (below), each
+document's first chunk must be in the prompt.
+
 The exit code is 1 on any regression: an LLM call, an error, a false
 decline, a near-topic or off-topic request sent to the summary route, an
 entity answer that no included chunk states, a shown citation that does
-not land on a chunk stating the answer, or an uncited answer without the
-label. Those are the parts of the decision that need no LLM to check.
+not land on a chunk stating the answer, an uncited answer without the
+label, or a document's first chunk missing from a small workspace's
+prompt. Those are the parts of the decision that need no LLM to check.
 
 | Citation accuracy (entity lookups) | Citations landing on a chunk that states the answer |
 |---|---|
@@ -166,7 +172,10 @@ A citation is shown only when the cited chunk's page text supports the
 claim. One that doesn't moves to an included chunk that does, or is
 dropped. An answer whose citations are all dropped says "I cannot find this
 in your documents." An answer that cites nothing is labelled "Not from your
-documents" and shows no sources.
+documents" and shows no sources. When a claim loses every citation it had
+but other claims keep theirs, the claim stays and the answer carries the
+note "Parts of this answer aren't linked to a source." A sentence the model
+never cited gets no note.
 
 Thirteen questions were asked of gpt-oss-120b through the app's
 `prepare()` (13 calls). All 12 answers were correct and 12 of 13 carried
@@ -196,6 +205,61 @@ a resume's name only from the chunk that states it. The lowest answerable
 cosine went from 0.503 to 0.500 (s19); "Summarize the plot of Hamlet"
 against the resume fell from 0.488 to 0.463 and is now declined by the
 gate.
+
+## Small workspaces
+
+A workspace is small when dense search returns every chunk the user can
+search there (fewer hits than `RETRIEVAL_CANDIDATE_K`, 20) and they all
+fit the prompt's context budget (`RAG_CONTEXT_TOKENS`, 2,500, counted the
+way the prompt builder counts). Then each document's first chunk always
+joins the prompt, after the reranker's top 8, and the answer gate never
+declines: the LLM decides. Both resumes qualify (8 chunks are 834 tokens,
+17 chunks are 1,058); the samples workspace (125 chunks) does not.
+
+Measured with zero LLM calls, 56 questions, the same ingested documents:
+
+| | Master | This change |
+|---|---|---|
+| False declines | 0 | 0 |
+| Must-decline sent to the summary route | 0 | 0 |
+| Must-decline sent to the LLM, which decides | 11 | 15 |
+| Answer in context (16 with `answer`) | 15 (v09 misses the name) | 16 |
+| Shown citations on a chunk that states the answer | 128 of 128 | 130 of 130 |
+| Resume questions whose prompt has every first chunk | 20 of 22 (4 declined by the gate) | 26 of 26 |
+| Regressions | 1 (v09) | 0 |
+
+The four must-decline questions that now reach the LLM are the off-topic
+ones against the first resume (o01, o03, o06, o07), which the gate used to
+decline. The first-chunk rule adds about 56 estimated prompt tokens, and
+only to the two questions it changes (s21, v09). The four questions now
+sent to the LLM cost a full prompt each (about 1,090 estimated tokens),
+where the gate used to cost nothing. Over the 26 small-workspace questions
+that is 172 estimated tokens per question.
+
+The name question with the cosine cut-off raised above its score (0.51,
+like a one-page resume whose name question scores just under 0.48):
+
+| | `rag_gate` line for "What is the name of the candidate?" |
+|---|---|
+| Master | `cosine_top=0.5004 cosine_threshold=0.51 reranker_top=0.0 zone=decline` |
+| This change | `cosine_top=0.5004 cosine_threshold=0.51 reranker_top=0.0 small_workspace=True zone=llm` |
+
+Then 7 questions were asked of gpt-oss-120b with this change's prompts
+(7 calls, one sample each at temperature 0.1):
+
+| Question | Answer after the citation rule |
+|---|---|
+| s19 "What is the name of the candidate?" | "Rosalind Kettleborne", citing the page 1 chunk that states it (already in the top 8, so the prompt is master's) |
+| v09 "Tell me about the candidate." | A profile with 10 citations, all on chunks that state their claims; it names her, and the name is only in the first chunk, which this change added |
+| s21 "What talks has the candidate given?" | Both talks, citing the Talks chunk |
+| o01, o03, o06, o07 (off-topic, first resume) | "I cannot find this in your documents.", no sources |
+
+Groq counts a prompt as its o200k tokens plus 74 per call; the app's
+cl100k estimate is 47 to 74 tokens low. Measured extra cost: 55 prompt
+tokens where a first chunk is added (v09, s21), and about 1,170 tokens for
+each off-topic question that now reaches the model. Over the 26
+small-workspace questions that is 184 extra Groq tokens per question,
+98% of it the four off-topic calls.
 
 ## Baseline on master (ad37336)
 

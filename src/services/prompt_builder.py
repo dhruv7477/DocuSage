@@ -158,6 +158,12 @@ class PromptBuilder:
             included_results=included,
         )
 
+    def fits(self, results: list[SearchResult]) -> bool:
+        """True when every distinct chunk in `results` fits the context budget."""
+        _, included = self._build_context(results)
+        distinct = {r.payload.text.strip() for r in results} - {""}
+        return len(included) == len(distinct)
+
     # ── Private ───────────────────────────────────────────────────
 
     def _build_context(

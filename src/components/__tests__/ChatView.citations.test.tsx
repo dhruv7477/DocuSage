@@ -4,11 +4,12 @@
  * same numbers, so a chip and its source card always match. A source shows
  * its rank among the passages, not the reranker score as a "% match" (the
  * score is not calibrated). A source an older answer cited for facts its
- * text lacks is shown without a highlight, and an answer that cites none of
- * the documents is labelled "Not from your documents".
+ * text lacks is shown without a highlight, an answer that cites none of
+ * the documents is labelled "Not from your documents", and one with a claim
+ * whose citation was dropped carries a note.
  */
 
-import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
+import { describe, it, expect, vi, afterAll, beforeAll, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ChatView } from '@/components/ChatView'
@@ -189,5 +190,45 @@ describe('an answer that cites none of the documents', () => {
     expect(bubble).toHaveTextContent('Not from your documents')
     expect(screen.getAllByText('Not from your documents')).toHaveLength(1)
     expect(screen.getAllByRole('button', { name: /Check sources/ })).toHaveLength(1)
+  })
+})
+
+describe('an answer with a claim whose citation was dropped', () => {
+  // Added for this block only, so the other tests keep one "Check sources".
+  const partial: Message[] = [
+    {
+      id: 'm5',
+      chat_id: 'chat-1',
+      role: 'user',
+      content: 'Which languages does the employee speak?',
+      token_count: null,
+      created_at: '2026-11-23T10:02:00Z',
+    },
+    {
+      id: 'm6',
+      chat_id: 'chat-1',
+      role: 'assistant',
+      content: 'The form is available in Spanish [1]. Employees may also speak Portuguese.',
+      token_count: null,
+      sources: [{ document_id: 'doc-1', chunk_id: 'chunk-9', source: 'i-9-instructions.pdf', page: 9, score: 0.4 }],
+      label: 'parts_unlinked',
+      created_at: '2026-11-23T10:02:05Z',
+    },
+  ]
+  beforeAll(() => {
+    MESSAGES.push(...partial)
+  })
+  afterAll(() => {
+    MESSAGES.splice(-partial.length)
+  })
+
+  it('carries one note under the answer, and no other answer does', async () => {
+    await renderAnswer()
+    const answer = await screen.findByText(/The form is available in Spanish/)
+    const bubble = answer.closest('.max-w-2xl') as HTMLElement
+
+    expect(bubble).toHaveTextContent("Parts of this answer aren't linked to a source.")
+    expect(screen.getAllByText("Parts of this answer aren't linked to a source.")).toHaveLength(1)
+    expect(bubble).not.toHaveTextContent('Not from your documents')
   })
 })
