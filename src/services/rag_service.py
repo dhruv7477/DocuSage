@@ -90,6 +90,9 @@ class _RetrievalOutcome:
     enrichment: QueryEnrichment
     # The answer gate's verdict: decline without an LLM call (see `_gate`).
     declined: bool = False
+    # Every chunk the user can search here fits the prompt (see
+    # `_retrieve_and_rerank`).
+    small_workspace: bool = False
     # The prompt actually sent to the LLM. `prompt.included_results[n-1]`
     # is the chunk behind citation [n] — the orchestrator builds the
     # sources event from this, never from a re-sorted view.
@@ -404,10 +407,18 @@ class RAGService:
             document_ids=document_ids,
         )
 
+        # A small workspace: retrieval returned every chunk the user can
+        # search here, and they all fit the prompt. Entity questions on such
+        # documents ("the name of the candidate") score near zero on the
+        # reranker and near any cosine cut-off, and the chunk that states a
+        # resume's name is its first, so each document's first chunk always
+        # joins the context and the gate leaves the decision to the LLM.
+        small = retrieval.complete and self._prompt_builder.fits(retrieval.results)
         log.info(
             "rag_stage_rerank",
             candidates=len(retrieval.results),
             top_k=self._top_k,
+            small_workspace=small,
         )
         if on_stage:
             on_stage("reranking")
@@ -416,8 +427,10 @@ class RAGService:
         reranked = await self._reranker.rerank(
             query=enrichment.original,
             results=retrieval.results,
-            top_k=self._top_k,
+            top_k=len(retrieval.results) if small else self._top_k,
         )
+        if small:
+            reranked = _with_first_chunks(reranked, self._top_k)
         confidence = compute_confidence(reranked)
 
         log.info(
@@ -429,24 +442,30 @@ class RAGService:
             results=reranked,
             confidence=confidence,
             enrichment=enrichment,
-            declined=self._gate(reranked, retrieval.dense_top_score),
+            declined=self._gate(reranked, retrieval.dense_top_score, small=small),
+            small_workspace=small,
         )
 
-    def _gate(self, reranked: list[SearchResult], cosine_top: float) -> bool:
+    def _gate(
+        self, reranked: list[SearchResult], cosine_top: float, *, small: bool
+    ) -> bool:
         """
         Decide whether to decline without an LLM call, and log the decision.
 
         The cross-encoder ranks well but scores answers worded unlike the
         question near zero ("the candidate" against a resume), so it never
         declines alone: a question is declined only when its top reranker
-        score AND its top dense cosine are both below their cut-offs. The
-        rest goes to the LLM, whose grounded prompt still lets it say the
-        documents don't cover the question. The log carries the scores, not
-        the question, so the cut-offs can be retuned from real traffic.
+        score AND its top dense cosine are both below their cut-offs. In a
+        small workspace it is never declined here (the LLM call is cheap,
+        and short documents score near any cut-off). The rest goes to the
+        LLM, whose grounded prompt still lets it say the documents don't
+        cover the question. The log carries the scores, not the question, so
+        the cut-offs can be retuned from real traffic.
         """
         reranker_top = reranked[0].score if reranked else 0.0
         declined = not reranked or (
-            reranker_top < self._reranker_threshold
+            not small
+            and reranker_top < self._reranker_threshold
             and cosine_top < self._cosine_threshold
         )
         log.info(
@@ -455,6 +474,7 @@ class RAGService:
             reranker_top=round(reranker_top, 4),
             cosine_top=round(cosine_top, 4),
             candidates=len(reranked),
+            small_workspace=small,
             reranker_threshold=self._reranker_threshold,
             cosine_threshold=self._cosine_threshold,
         )
@@ -462,6 +482,12 @@ class RAGService:
 
     def _is_abstaining(self, outcome: _RetrievalOutcome) -> bool:
         return outcome.declined
+
+
+def _with_first_chunks(ranked: list[SearchResult], top_k: int) -> list[SearchResult]:
+    """The top `top_k`, then the first chunk of each document not among them."""
+    top = ranked[:top_k]
+    return top + [r for r in ranked[top_k:] if r.payload.chunk_index == 0]
 
 
 def _results_to_cited(results: list[SearchResult]) -> list[CitedSource]:
