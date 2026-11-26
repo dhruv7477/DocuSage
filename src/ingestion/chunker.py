@@ -33,6 +33,11 @@ Algorithm
 5. Carry forward an overlap of the last ~`overlap_tokens` tokens of
    the just-flushed chunk so contiguous chunks share context — vital
    for answers that straddle a chunk boundary.
+6. A document title (a heading that opens every chunk's heading path,
+   such as a resume's name) stays in the path only of the chunks whose
+   text prints it. The path is embedded and shown to the model above
+   each chunk, so a title repeated on every chunk made every passage
+   look like evidence for it.
 
 Tables get their own chunk (never combined with surrounding paragraphs)
 because they're typically self-contained and slicing them mid-row
@@ -223,6 +228,7 @@ class SemanticChunker:
 
         if current:
             chunks.append(self._flush(current, len(chunks)))
+        _drop_repeated_title(chunks)
 
         # Wire prev/next pointers (using chunk_index — UUIDs are assigned
         # later by the ingestion pipeline; the pipeline copies these
@@ -355,6 +361,26 @@ class SemanticChunker:
 def _has_body(blocks: list[ParsedBlock]) -> bool:
     """True when the blocks hold content, not only headings."""
     return any(b.block_type != "heading" for b in blocks)
+
+
+def _drop_repeated_title(chunks: list[TextChunk]) -> None:
+    """Remove the document title from the heading path of chunks that don't print it."""
+    title = _document_title(chunks)
+    if title is None:
+        return
+    for chunk in chunks:
+        if title not in chunk.text:
+            chunk.heading_path = chunk.heading_path[1:]
+
+
+def _document_title(chunks: list[TextChunk]) -> str | None:
+    """The heading that opens every chunk's heading path, if there is one."""
+    if len(chunks) < 2 or not chunks[0].heading_path:
+        return None
+    title = chunks[0].heading_path[0]
+    if all(c.heading_path[:1] == [title] for c in chunks):
+        return title
+    return None
 
 
 # ── Backward-compat shim ──────────────────────────────────────────

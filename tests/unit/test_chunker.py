@@ -185,6 +185,52 @@ class TestSemanticChunker:
         assert chunk.heading_path == ["Talia Brennerholt"]
         assert chunk.char_start == 0
 
+    def test_a_document_title_heads_only_the_chunk_that_prints_it(self):
+        """
+        A resume's name opens every heading path. Kept there, it is in
+        every chunk's embedding and prompt header, so any passage looks
+        like evidence for the name. Only the chunk whose text prints the
+        name keeps it.
+        """
+        chunker = SemanticChunker(chunk_tokens=500, overlap_tokens=0)
+        name = "Rosalind Kettleborne"
+        doc = ParsedDocument(
+            filename="resume.pdf",
+            blocks=[
+                _heading(name, level=1, page=1, char_start=0),
+                _para("Austin, Texas", page=1, char_start=21, heading_path=[name]),
+                _heading(
+                    "Hackathons", level=2, page=2, char_start=40, heading_path=[name]
+                ),
+                _para(
+                    "First place, Riverbend Data Jam 2024",
+                    page=2,
+                    char_start=52,
+                    heading_path=[name, "Hackathons"],
+                ),
+            ],
+            total_pages=2,
+        )
+        first, second = chunker.chunk_document(doc)
+        assert first.heading_path == [name]
+        assert first.embedding_text() == f"{name}\n\nAustin, Texas"
+        assert second.heading_path == ["Hackathons"]
+        assert name not in second.embedding_text()
+
+    def test_a_heading_that_opens_only_some_paths_is_not_a_title(self):
+        chunker = SemanticChunker(chunk_tokens=500, overlap_tokens=0)
+        doc = ParsedDocument(
+            filename="t.pdf",
+            blocks=[
+                _para("Front matter.", char_start=0),
+                _heading("Guide", level=1, char_start=14),
+                _para("Body.", char_start=20, heading_path=["Guide"]),
+            ],
+            total_pages=1,
+        )
+        first, second = chunker.chunk_document(doc)
+        assert (first.heading_path, second.heading_path) == ([], ["Guide"])
+
     def test_consecutive_headings_open_the_next_chunk_together(self):
         chunker = SemanticChunker(chunk_tokens=500, overlap_tokens=0)
         doc = ParsedDocument(
