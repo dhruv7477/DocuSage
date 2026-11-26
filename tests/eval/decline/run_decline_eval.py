@@ -26,6 +26,11 @@ A general-knowledge question must reach the model, and an answer that
 cites nothing must be shown with the "Not from your documents" label and
 no sources.
 
+It also reports the estimated prompt tokens of every question that reaches
+the answer LLM (the cost side), and, in a small workspace (one whose
+chunks all fit the prompt), checks that each document's first chunk is in
+the prompt.
+
 Run inside the api image (see README.md in this folder):
 
     python /work/run_decline_eval.py --email decline-eval@example.com
@@ -281,6 +286,12 @@ class Result:
     citation_misses: list[int] = field(default_factory=list)
     # General knowledge: an uncited answer is labelled and shows no sources.
     uncited_labelled: bool | None = None
+    # Cost and context: the estimated prompt tokens of a question that
+    # reaches the answer LLM, whether its workspace counts as small, and
+    # whether every document's first chunk is in the prompt's context.
+    prompt_tokens: int | None = None
+    small_workspace: bool | None = None
+    first_chunks_in_context: bool | None = None
 
     @property
     def answer_in_context(self) -> bool | None:
@@ -309,6 +320,7 @@ async def evaluate(
     citations: tuple[int, list[int]] = (0, [])
     context_rank: int | None = None
     uncited_labelled: bool | None = None
+    first_chunks: bool | None = None
     try:
         plan = await orchestrator.prepare(
             query=question.question,
@@ -325,6 +337,8 @@ async def evaluate(
             citations = check_citations(question, plan.sources)
         if question.category == GENERAL_KNOWLEDGE and intent == "rag_query":
             uncited_labelled = check_uncited(question, plan.sources)
+        if intent == "rag_query":
+            first_chunks = _first_chunks_in(plan.sources, space)
         await _close(plan.token_iter)
     except Exception as exc:  # reported per question, never hidden
         error = f"{type(exc).__name__}: {exc}"
@@ -336,6 +350,7 @@ async def evaluate(
         verdict = "error"
     else:
         verdict = "decline" if intent == DECLINED_INTENT else "answer"
+    prompt = getattr(outcome, "prompt", None)
     return Result(
         id=question.id,
         category=question.category,
@@ -359,6 +374,13 @@ async def evaluate(
         citations_checked=citations[0],
         citation_misses=citations[1],
         uncited_labelled=uncited_labelled,
+        prompt_tokens=(
+            prompt.estimated_tokens
+            if prompt is not None and intent == "rag_query"
+            else None
+        ),
+        small_workspace=getattr(outcome, "small_workspace", None),
+        first_chunks_in_context=first_chunks,
     )
 
 
@@ -394,6 +416,12 @@ def check_uncited(question: Question, sources: list[CitedSource]) -> bool:
     """An answer citing nothing is labelled and shown with no sources."""
     final = finalize_rag_answer(UNCITED_ANSWER, sources, question=question.question)
     return final.label == NOT_FROM_DOCUMENTS and not final.sources
+
+
+def _first_chunks_in(sources: list[CitedSource], space: WorkspaceContext) -> bool:
+    """True when the first chunk of every document in the workspace is a source."""
+    present = {s.document_id for s in sources if s.chunk_index == 0}
+    return all(doc_id in present for doc_id, _ in space.documents)
 
 
 def _first_rank(texts: list[str], answer: str | None) -> int | None:
@@ -475,10 +503,33 @@ def print_report(results: list[Result], llm_calls: list[str]) -> None:
             f"General knowledge: {labelled} of {len(general)} uncited answers "
             f"labelled with no sources"
         )
+    _print_cost(results)
     errors = sum(r.outcome == "error" for r in results)
     print(f"\nErrors: {errors}   LLM calls attempted: {len(llm_calls)}")
     if llm_calls:
         print("Blocked LLM calls: " + ", ".join(llm_calls))
+
+
+def _print_cost(results: list[Result]) -> None:
+    """Estimated prompt tokens per workspace, and first chunks in the context."""
+    priced = [r for r in results if r.prompt_tokens is not None]
+    if not priced:
+        return
+    total = sum(r.prompt_tokens or 0 for r in priced)
+    print(
+        f"\nPrompt tokens (estimated) of the {len(priced)} questions that reach "
+        f"the answer LLM: {total}, mean {total / len(priced):.0f}"
+    )
+    for workspace in sorted({r.workspace for r in priced}):
+        rows = [r for r in priced if r.workspace == workspace]
+        tokens = sum(r.prompt_tokens or 0 for r in rows)
+        small = {r.small_workspace for r in rows}
+        first = sum(bool(r.first_chunks_in_context) for r in rows)
+        print(
+            f"  {workspace}: {len(rows)} questions, mean {tokens / len(rows):.0f}, "
+            f"small workspace {small}, every first chunk in the context "
+            f"{first} of {len(rows)}"
+        )
 
 
 def _print_summary(label: str, results: list[Result]) -> None:
@@ -549,6 +600,8 @@ def regressions(results: list[Result]) -> list[str]:
             )
         if r.uncited_labelled is False:
             found.append(f"{r.id}: an uncited answer is not labelled")
+        if r.small_workspace and r.first_chunks_in_context is False:
+            found.append(f"{r.id}: a document's first chunk is not in the context")
     return found
 
 
