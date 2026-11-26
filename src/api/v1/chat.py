@@ -452,7 +452,7 @@ async def _sse_generator(
            abstention contract) and persist the corrected text
         4. `warning` events (abstention / validator findings)
         5. `sources` event — context-ordered: sources[n-1] backs [n]; with
-           the answer's label ("not_from_documents" or null)
+           the answer's label ("not_from_documents", "parts_unlinked" or null)
         6. `done` event
 
     On any error: emit error event and close stream cleanly.

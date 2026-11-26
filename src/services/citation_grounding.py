@@ -26,7 +26,9 @@ there), or, when none does, it is dropped.
 `finalize_rag_answer` applies the rule to a whole answer: cited claims of
 which none is supported become the "not in your documents" reply, and an
 answer that cites nothing is general knowledge, shown with the
-`NOT_FROM_DOCUMENTS` label and no sources.
+`NOT_FROM_DOCUMENTS` label and no sources. An answer that keeps some
+citations but has a claim that lost all of its own gets the
+`PARTS_UNLINKED` label, shown as a note under the answer.
 """
 
 from __future__ import annotations
@@ -43,6 +45,8 @@ log = get_logger(__name__)
 
 # The label of an answer that cites none of the documents.
 NOT_FROM_DOCUMENTS = "not_from_documents"
+# The label of an answer with a claim whose citations were all dropped.
+PARTS_UNLINKED = "parts_unlinked"
 
 # Share of a claim's fact words the cited chunk's own text must contain.
 SUPPORT_SHARE = 0.6
@@ -88,6 +92,7 @@ class GroundedCitations:
     answer: str
     moved: dict[int, int] = field(default_factory=dict)  # source n -> source m
     dropped: set[int] = field(default_factory=set)  # cited, never supported
+    unlinked: int = 0  # claims that had citations and lost all of them
 
 
 @dataclass(frozen=True)
@@ -114,6 +119,7 @@ def ground_citations(
     moved: dict[int, int] = {}
     supported: set[int] = set()
     dropped: set[int] = set()
+    unlinked = 0
     parts: list[str] = []
     last = 0
 
@@ -146,10 +152,14 @@ def ground_citations(
         elif targets:
             lead = _LEADING_SPACE_RE.match(group.group()).group()  # type: ignore[union-attr]
             parts.append(lead + "".join(f"[{t}]" for t in targets))
+        else:
+            unlinked += 1
         last = group.end()
 
     parts.append(answer[last:])
-    return GroundedCitations(answer="".join(parts), moved=moved, dropped=dropped)
+    return GroundedCitations(
+        answer="".join(parts), moved=moved, dropped=dropped, unlinked=unlinked
+    )
 
 
 def finalize_rag_answer(
@@ -164,6 +174,9 @@ def finalize_rag_answer(
       `NOT_FROM_DOCUMENTS` label, no sources.
     - Otherwise each citation is grounded; when none survives, no claim
       about the documents is supported and the answer is the decline.
+    - When some survive but a claim lost all of its citations, the answer
+      keeps that claim and gets the `PARTS_UNLINKED` label. A sentence the
+      model never cited does not count.
     """
     if answer.strip().startswith(NO_ANSWER_PHRASE):
         return FinalAnswer(answer, [])
@@ -179,6 +192,8 @@ def finalize_rag_answer(
         )
     if not _MARKER_RE.search(grounded.answer):
         return FinalAnswer(NO_ANSWER_PHRASE, [])
+    if grounded.unlinked:
+        return FinalAnswer(grounded.answer, sources, PARTS_UNLINKED)
     return FinalAnswer(grounded.answer, sources)
 
 

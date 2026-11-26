@@ -636,9 +636,13 @@ class TestSSEStreamEndpoint:
         assert self._saved()["content"] == NO_ANSWER_PHRASE
         assert self._saved()["sources"] == []
 
-    def test_an_unsupported_citation_is_not_shown(
+    def test_an_unsupported_citation_is_not_shown_and_the_answer_gets_a_note(
         self, test_app, user_id, workspace_id, chat_id, headers
     ):
+        """
+        The claim whose only citation was dropped stays in the answer; the
+        answer is labelled so the chat notes that parts of it aren't linked.
+        """
         from src.services.prompt_builder import NO_ANSWER_PHRASE
 
         events = self._grounded_stream(
@@ -652,6 +656,10 @@ class TestSSEStreamEndpoint:
         finals = [e["content"] for e in events if e.get("type") == "answer_final"]
         assert finals == ["She is AWS Certified [1]. She speaks Portuguese."]
         assert NO_ANSWER_PHRASE not in finals[0]
+        [event] = [e for e in events if e.get("type") == "sources"]
+        assert event["label"] == "parts_unlinked"
+        assert len(event["sources"]) == 2
+        assert self._saved()["label"] == "parts_unlinked"
 
     def test_an_answer_citing_no_document_is_labelled_not_from_your_documents(
         self, test_app, user_id, workspace_id, chat_id, headers

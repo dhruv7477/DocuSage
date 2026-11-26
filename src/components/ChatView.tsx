@@ -102,6 +102,17 @@ function NotFromDocumentsLabel() {
   )
 }
 
+// A claim whose citations were all dropped (no passage states it) stays in
+// the answer without one; this note says so.
+function PartsUnlinkedNote() {
+  return (
+    <p className="mt-1.5 px-1 flex items-center gap-1.5 text-2xs text-subtle">
+      <Info className="w-3 h-3 shrink-0" aria-hidden="true" />
+      {"Parts of this answer aren't linked to a source."}
+    </p>
+  )
+}
+
 // ── Citation helpers ──────────────────────────────────────────────
 
 // While an answer streams its sources are not known yet, so its [n]
@@ -341,6 +352,7 @@ function MessageBubble({ msg, userQuery }: { msg: Message; userQuery?: string })
         </div>
 
         {msg.label === 'not_from_documents' && <NotFromDocumentsLabel />}
+        {msg.label === 'parts_unlinked' && <PartsUnlinkedNote />}
 
         {/* Sources (collapsed dropdown; RAG answers only) */}
         {sources.length > 0 && <SourcesDisclosure sources={sources} cited={cited} query={userQuery} />}

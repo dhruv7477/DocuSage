@@ -59,6 +59,7 @@ class MessageResponse(BaseModel):
     content: str
     sources: list[CitedSourceResponse] = []
     # "not_from_documents": the answer cites none of the documents.
+    # "parts_unlinked": a claim lost every citation it had.
     label: str | None = None
     created_at: datetime
 

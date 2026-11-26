@@ -86,7 +86,8 @@ class Message(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     token_count: tracked for LLM context window management.
     sources_json: JSON list of document IDs used to answer (for citations).
     answer_label: "not_from_documents" on an answer that cites none of
-    the documents; otherwise empty.
+    the documents, "parts_unlinked" on one with a claim whose citations
+    were all dropped; otherwise empty.
     """
 
     __tablename__ = "messages"

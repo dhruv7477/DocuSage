@@ -91,12 +91,13 @@ export interface Message {
   /** Citations backing an assistant message. The API serializes this as
    *  `sources` (matching QueryResponse + the SSE `sources` event). */
   sources?: CitedSource[]
-  /** 'not_from_documents' on an answer that cites none of the documents. */
+  /** 'not_from_documents': the answer cites none of the documents.
+   *  'parts_unlinked': a claim lost every citation it had (no passage states it). */
   label?: AnswerLabel | null
   created_at: string
 }
 
-export type AnswerLabel = 'not_from_documents'
+export type AnswerLabel = 'not_from_documents' | 'parts_unlinked'
 
 export interface CitedSource {
   document_id: string
