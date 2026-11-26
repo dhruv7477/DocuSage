@@ -1,16 +1,24 @@
 """
 tests/unit/test_citation_grounding.py
 ──────────────────────────────────────
-A citation must point to a chunk whose own text states the cited fact.
-The model sees each chunk's heading path above its text, so it can cite a
-chunk for a fact that only its heading carries (a resume's name heads
-every chunk). Such a citation moves to an included chunk whose text has
-the fact, or, when none has it, stays but loses its highlight.
+A citation is shown only when the cited chunk's page text states the
+claim. The model sees each chunk's heading path above its text, so it can
+cite a chunk for a fact only the heading path carries (a resume's name
+heads every chunk); a heading path is never evidence. Such a citation
+moves to an included chunk whose text has the fact, or is dropped. An
+answer whose claims about the documents have no support says the answer
+is not in the documents; an answer with no citations is general knowledge
+and carries a "Not from your documents" label and no sources.
 """
 
 import pytest
 
-from src.services.citation_grounding import ground_citations, ground_sources
+from src.services.citation_grounding import (
+    NOT_FROM_DOCUMENTS,
+    finalize_rag_answer,
+    ground_citations,
+)
+from src.services.prompt_builder import NO_ANSWER_PHRASE
 from src.services.rag_service import CitedSource
 
 pytestmark = pytest.mark.unit
@@ -28,7 +36,7 @@ class TestGroundCitations:
         g = ground_citations("Talia Brennerholt [1].", SOURCES, question=NAME_QUESTION)
         assert g.answer == "Talia Brennerholt [2]."
         assert g.moved == {1: 2}
-        assert g.unsupported == set()
+        assert g.dropped == set()
 
     def test_a_moved_citation_that_duplicates_another_is_dropped(self):
         g = ground_citations("Talia Brennerholt[2][3]", SOURCES, question=NAME_QUESTION)
@@ -54,7 +62,7 @@ class TestGroundCitations:
         g = ground_citations(answer, SOURCES, question="When can she start?")
         assert g.answer == answer
         assert g.moved == {}
-        assert g.unsupported == set()
+        assert g.dropped == set()
 
     def test_each_claim_is_checked_against_its_own_citation(self):
         g = ground_citations(
@@ -64,21 +72,30 @@ class TestGroundCitations:
         )
         assert g.answer == "She is AWS certified [1]. She can start on May 1, 2026 [2]."
 
-    def test_a_fact_no_chunk_states_keeps_its_citation_without_a_highlight(self):
-        answer = "She speaks fluent Portuguese [1]."
+    def test_a_citation_no_chunk_supports_is_dropped(self):
         g = ground_citations(
-            answer, SOURCES, question="Which languages does she speak?"
+            "She speaks fluent Portuguese [1].",
+            SOURCES,
+            question="Which languages does she speak?",
         )
-        assert g.answer == answer
-        assert g.unsupported == {1}
+        assert g.answer == "She speaks fluent Portuguese."
+        assert g.dropped == {1}
 
-    def test_a_source_cited_with_support_elsewhere_keeps_its_highlight(self):
+    def test_only_the_unsupported_claim_loses_its_citation(self):
         g = ground_citations(
             "She is AWS Certified [1]. She speaks Portuguese [1].",
             SOURCES,
             question="Tell me about her.",
         )
-        assert g.unsupported == set()
+        assert g.answer == "She is AWS Certified [1]. She speaks Portuguese."
+
+    def test_a_heading_path_is_never_evidence(self):
+        # The chunk text the check reads is the page text; the heading path
+        # ("Talia Brennerholt > Certifications") is not part of it.
+        sources = ["Certifications\n\nAWS Certified Data Engineer, Associate (2024)"]
+        g = ground_citations("Talia Brennerholt [1].", sources, question=NAME_QUESTION)
+        assert g.answer == "Talia Brennerholt."
+        assert g.dropped == {1}
 
     def test_bullet_lists_and_markdown_are_handled(self):
         answer = (
@@ -97,7 +114,7 @@ class TestGroundCitations:
             sources,
             question="What changed?",
         )
-        assert g.unsupported == set()
+        assert g.dropped == set()
 
     def test_a_short_claim_needs_every_fact_word(self):
         # "AWS Certified Data Engineer" has 2 of the 3 words, not the role.
@@ -122,7 +139,7 @@ class TestGroundCitations:
     def test_a_claim_of_only_question_words_is_left_alone(self):
         g = ground_citations("Yes [1].", SOURCES, question="Is she certified?")
         assert g.answer == "Yes [1]."
-        assert g.unsupported == set()
+        assert g.dropped == set()
 
     def test_an_answer_without_citations_is_unchanged(self):
         g = ground_citations("No markers here.", SOURCES, question=NAME_QUESTION)
@@ -141,22 +158,51 @@ def _source(n: int, text: str) -> CitedSource:
     )
 
 
-class TestGroundSources:
-    """What the stream endpoint sends: the corrected answer and its sources."""
+class TestFinalizeRagAnswer:
+    """What the stream endpoint sends: the answer, its sources and its label."""
 
-    def test_moved_citations_change_the_answer_and_keep_highlights(self):
-        sources = [_source(n, text) for n, text in enumerate(SOURCES, 1)]
-        answer, shown = ground_sources(
-            "Talia Brennerholt [1].", sources, question=NAME_QUESTION
-        )
-        assert answer == "Talia Brennerholt [2]."
-        assert [s.highlight for s in shown] == [True, True, True]
+    @staticmethod
+    def _sources() -> list[CitedSource]:
+        return [_source(n, text) for n, text in enumerate(SOURCES, 1)]
 
-    def test_an_unsupported_source_is_shown_without_a_highlight(self):
-        sources = [_source(n, text) for n, text in enumerate(SOURCES, 1)]
-        answer, shown = ground_sources(
-            "She speaks Portuguese [1].", sources, question="Which languages?"
+    def test_a_supported_answer_keeps_its_sources_and_has_no_label(self):
+        final = finalize_rag_answer(
+            "Talia Brennerholt [1].", self._sources(), question=NAME_QUESTION
         )
-        assert answer == "She speaks Portuguese [1]."
-        assert [s.highlight for s in shown] == [False, True, True]
-        assert sources[0].highlight  # the inputs are not changed
+        assert final.answer == "Talia Brennerholt [2]."
+        assert len(final.sources) == 3
+        assert final.label is None
+
+    def test_cited_claims_nothing_supports_say_the_answer_is_not_in_the_documents(
+        self,
+    ):
+        final = finalize_rag_answer(
+            "She speaks fluent Portuguese [1].",
+            self._sources(),
+            question="Which languages does she speak?",
+        )
+        assert final.answer == NO_ANSWER_PHRASE
+        assert final.sources == []
+        assert final.label is None
+
+    def test_an_uncited_answer_is_general_knowledge(self):
+        final = finalize_rag_answer(
+            "Data engineers build and run the pipelines that move data.",
+            self._sources(),
+            question="What does a data engineer do?",
+        )
+        assert (
+            final.answer == "Data engineers build and run the pipelines that move data."
+        )
+        assert final.sources == []
+        assert final.label == NOT_FROM_DOCUMENTS == "not_from_documents"
+
+    def test_a_model_decline_has_no_sources_and_no_label(self):
+        final = finalize_rag_answer(
+            NO_ANSWER_PHRASE, self._sources(), question="What is her salary?"
+        )
+        assert (final.answer, final.sources, final.label) == (
+            NO_ANSWER_PHRASE,
+            [],
+            None,
+        )

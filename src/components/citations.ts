@@ -8,8 +8,8 @@ import type { CitedSource } from '@/api'
 
 /**
  * The chunk to highlight on a source's page, or undefined to show the plain
- * page: the server marks a source `highlight: false` when the answer cites it
- * only for facts its own text does not state.
+ * page. Answers saved before the server dropped unsupported citations mark
+ * such a source `highlight: false`; the server no longer sends it.
  */
 export function highlightChunkId(source: CitedSource): string | undefined {
   return source.highlight === false ? undefined : source.chunk_id

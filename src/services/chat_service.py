@@ -141,10 +141,12 @@ class ChatService:
         chat_id: uuid.UUID,
         content: str,
         sources: list[CitedSource] | None = None,
+        label: str | None = None,
     ) -> Message:
         """
         Persist an assistant turn to the messages table.
-        Sources are serialised as JSON for display in the UI.
+        Sources are serialised as JSON for display in the UI; `label` is
+        the answer's label ("not_from_documents"), if any.
         """
         # Persist the enriched citation shape so the UI can render
         # heading paths and (eventually) link to the exact passage on a
@@ -162,7 +164,6 @@ class ChatService:
                     "char_start": getattr(s, "char_start", 0),
                     "char_end": getattr(s, "char_end", 0),
                     "text": getattr(s, "text", "") or "",
-                    "highlight": getattr(s, "highlight", True),
                 }
                 for s in sources
             ]
@@ -170,7 +171,11 @@ class ChatService:
             else None
         )
         return await self._save_message(
-            chat_id, MessageRole.ASSISTANT, content, sources_json=sources_list
+            chat_id,
+            MessageRole.ASSISTANT,
+            content,
+            sources_json=sources_list,
+            answer_label=label,
         )
 
     async def _save_message(
@@ -179,6 +184,7 @@ class ChatService:
         role: MessageRole,
         content: str,
         sources_json: list | None = None,
+        answer_label: str | None = None,
     ) -> Message:
         token_count = max(1, len(content) // CHARS_PER_TOKEN)
         message = Message(
@@ -187,6 +193,7 @@ class ChatService:
             content=content,
             token_count=token_count,
             sources_json=sources_json,
+            answer_label=answer_label,
         )
         self._db.add(message)
         # Increment message counter on the parent chat

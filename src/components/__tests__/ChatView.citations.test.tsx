@@ -3,8 +3,9 @@
  * [n] chips, and "Check sources" lists exactly the cited sources under the
  * same numbers, so a chip and its source card always match. A source shows
  * its rank among the passages, not the reranker score as a "% match" (the
- * score is not calibrated), and one the answer cites only for facts its
- * text lacks is shown without a highlight.
+ * score is not calibrated). A source an older answer cited for facts its
+ * text lacks is shown without a highlight, and an answer that cites none of
+ * the documents is labelled "Not from your documents".
  */
 
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
@@ -64,10 +65,28 @@ const { MESSAGES } = vi.hoisted(() => {
       role: 'assistant',
       content: 'Within three business days【1†p.2】【3†p.2】.',
       token_count: null,
-      // Source 2 has the highest score but is not cited. Source 3 is cited
-      // for a fact its own text lacks, so it is shown without a highlight.
+      // Source 2 has the highest score but is not cited. Source 3 was cited
+      // by an older version for a fact its text lacks: shown without a highlight.
       sources: [source(1, 0.5), source(2, 0.99), { ...source(3, 0.4), highlight: false }],
       created_at: '2026-11-23T10:00:05Z',
+    },
+    {
+      id: 'm3',
+      chat_id: 'chat-1',
+      role: 'user',
+      content: 'What does an I-9 auditor typically do?',
+      token_count: null,
+      created_at: '2026-11-23T10:01:00Z',
+    },
+    {
+      id: 'm4',
+      chat_id: 'chat-1',
+      role: 'assistant',
+      content: 'Auditors compare each form against its supporting documents.',
+      token_count: null,
+      sources: [],
+      label: 'not_from_documents',
+      created_at: '2026-11-23T10:01:05Z',
     },
   ]
   return { MESSAGES: messages }
@@ -158,5 +177,17 @@ describe('source cards', () => {
     expect(calls).toContainEqual(['doc-1', 1, 'chunk-1', 2, true])
     expect(calls).toContainEqual(['doc-1', 3, undefined, 2, true])
     expect(calls).not.toContainEqual(['doc-1', 3, 'chunk-3', 2, true])
+  })
+})
+
+describe('an answer that cites none of the documents', () => {
+  it('is labelled "Not from your documents" and has no sources', async () => {
+    await renderAnswer()
+    const answer = screen.getByText(/Auditors compare each form/)
+    const bubble = answer.closest('.max-w-2xl') as HTMLElement
+
+    expect(bubble).toHaveTextContent('Not from your documents')
+    expect(screen.getAllByText('Not from your documents')).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: /Check sources/ })).toHaveLength(1)
   })
 })

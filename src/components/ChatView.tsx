@@ -91,6 +91,17 @@ function WarningBanner({ warning }: { warning: StreamWarning }) {
   )
 }
 
+// An answer that cites none of the documents is general knowledge: it is
+// labelled so, and has no sources.
+function NotFromDocumentsLabel() {
+  return (
+    <p className="mt-1.5 px-1 inline-flex items-center gap-1.5 font-mono text-2xs uppercase tracking-widest text-amber/90">
+      <Info className="w-3 h-3" aria-hidden="true" />
+      Not from your documents
+    </p>
+  )
+}
+
 // ── Citation helpers ──────────────────────────────────────────────
 
 // While an answer streams its sources are not known yet, so its [n]
@@ -328,6 +339,8 @@ function MessageBubble({ msg, userQuery }: { msg: Message; userQuery?: string })
         )}>
           {isUser ? msg.content : <AnswerText content={msg.content} sources={sources} query={userQuery} />}
         </div>
+
+        {msg.label === 'not_from_documents' && <NotFromDocumentsLabel />}
 
         {/* Sources (collapsed dropdown; RAG answers only) */}
         {sources.length > 0 && <SourcesDisclosure sources={sources} cited={cited} query={userQuery} />}

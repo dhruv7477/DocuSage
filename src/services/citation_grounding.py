@@ -1,13 +1,15 @@
 """
 src/services/citation_grounding.py
 ──────────────────────────────────
-Checks every citation in a finished answer against the cited chunk's own
-text. Deterministic, no LLM call.
+Checks every citation in a finished answer against the cited chunk's page
+text, and decides what the answer shows. Deterministic, no LLM call.
 
-The model sees each chunk's heading path above its text (prompt_builder),
-so it can cite a chunk for a fact only the heading carries: a resume's name
-heads every chunk, and "Talia Brennerholt [1]" may point at a
-certifications chunk whose page image then highlights the wrong line.
+The rule: a citation is shown only when the page text supports the claim.
+The evidence is the chunk's own text (the words on its page, including a
+heading printed in that chunk), never its heading path: the model sees the
+path above each chunk (prompt_builder), and a resume's name heads every
+chunk, so "Rosalind Kettleborne [1]" may point at a hackathons chunk on
+another page that never states it.
 
 For each run of markers, the claim it closes (the text back to the start
 of its sentence or line, or to the previous markers) is reduced to its
@@ -16,16 +18,27 @@ rather than support. A cited chunk supports the claim when its text holds
 all of them for a short claim (`SHORT_CLAIM_WORDS`), or at least
 `SUPPORT_SHARE` of them for a longer one. Otherwise the citation moves to the
 included chunk that does (and is dropped if that chunk is already cited
-there), or, when none does, it stays and is reported as unsupported, so
-the UI shows its page without a highlight.
+there), or, when none does, it is dropped.
+
+`finalize_rag_answer` applies the rule to a whole answer: cited claims of
+which none is supported become the "not in your documents" reply, and an
+answer that cites nothing is general knowledge, shown with the
+`NOT_FROM_DOCUMENTS` label and no sources.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
+from src.core.logger import get_logger
+from src.services.prompt_builder import NO_ANSWER_PHRASE
 from src.services.rag_service import CitedSource
+
+log = get_logger(__name__)
+
+# The label of an answer that cites none of the documents.
+NOT_FROM_DOCUMENTS = "not_from_documents"
 
 # Share of a claim's fact words the cited chunk's own text must contain.
 SUPPORT_SHARE = 0.6
@@ -60,23 +73,33 @@ class GroundedCitations:
 
     answer: str
     moved: dict[int, int] = field(default_factory=dict)  # source n -> source m
-    unsupported: set[int] = field(default_factory=set)  # cited, never supported
+    dropped: set[int] = field(default_factory=set)  # cited, never supported
+
+
+@dataclass(frozen=True)
+class FinalAnswer:
+    """What a document answer shows: its text, its sources and its label."""
+
+    answer: str
+    sources: list[CitedSource]
+    label: str | None = None
 
 
 def ground_citations(
     answer: str, source_texts: list[str], *, question: str
 ) -> GroundedCitations:
     """
-    Re-point each [n] in `answer` to a source whose text states the claim.
+    Re-point each [n] in `answer` to a source whose text states the claim,
+    and drop it when none does.
 
-    `source_texts[n - 1]` is the text of the chunk behind [n]. Markers
+    `source_texts[n - 1]` is the page text of the chunk behind [n]. Markers
     outside that range are left for the answer validator.
     """
     question_words = _words(question)
     chunk_words = [_words(text) for text in source_texts]
     moved: dict[int, int] = {}
     supported: set[int] = set()
-    unsupported: set[int] = set()
+    dropped: set[int] = set()
     parts: list[str] = []
     last = 0
 
@@ -84,49 +107,61 @@ def ground_citations(
         facts = _words(_claim(answer[last : group.start()])) - question_words
         targets: list[int] = []
         for n in (int(m) for m in _MARKER_RE.findall(group.group())):
-            target = n
+            target: int | None = n
             if facts and 1 <= n <= len(chunk_words):
                 if _supports(chunk_words[n - 1], facts):
                     supported.add(n)
                 else:
-                    best = _best_support(chunk_words, facts)
-                    if best is None:
-                        unsupported.add(n)
+                    target = _best_support(chunk_words, facts)
+                    if target is None:
+                        dropped.add(n)
                     else:
-                        target = moved[n] = best
-                        supported.add(best)
-            if target not in targets:
+                        moved[n] = target
+                        supported.add(target)
+            if target is not None and target not in targets:
                 targets.append(target)
 
         parts.append(answer[last : group.start()])
         original = [int(m) for m in _MARKER_RE.findall(group.group())]
         if targets == original:
             parts.append(group.group())
-        else:
+        elif targets:
             lead = _LEADING_SPACE_RE.match(group.group()).group()  # type: ignore[union-attr]
             parts.append(lead + "".join(f"[{t}]" for t in targets))
         last = group.end()
 
     parts.append(answer[last:])
-    return GroundedCitations(
-        answer="".join(parts), moved=moved, unsupported=unsupported - supported
-    )
+    return GroundedCitations(answer="".join(parts), moved=moved, dropped=dropped)
 
 
-def ground_sources(
+def finalize_rag_answer(
     answer: str, sources: list[CitedSource], *, question: str
-) -> tuple[str, list[CitedSource]]:
+) -> FinalAnswer:
     """
-    Ground `answer`'s citations in the context-ordered `sources` (source n
-    backs [n]). Returns the corrected answer and the sources, with
-    `highlight=False` on each one cited only for facts its text lacks.
+    Apply the citation rule to a validated document answer whose markers
+    index the context-ordered `sources` (source n backs [n]).
+
+    - The model's own decline keeps its text and shows no sources.
+    - An answer that cites nothing is general knowledge: its text, the
+      `NOT_FROM_DOCUMENTS` label, no sources.
+    - Otherwise each citation is grounded; when none survives, no claim
+      about the documents is supported and the answer is the decline.
     """
+    if answer.strip().startswith(NO_ANSWER_PHRASE):
+        return FinalAnswer(answer, [])
+    if not _MARKER_RE.search(answer):
+        log.info("answer_not_from_documents", preview=answer[:120])
+        return FinalAnswer(answer, [], NOT_FROM_DOCUMENTS)
     grounded = ground_citations(answer, [s.text for s in sources], question=question)
-    shown = [
-        replace(s, highlight=False) if n in grounded.unsupported else s
-        for n, s in enumerate(sources, 1)
-    ]
-    return grounded.answer, shown
+    if grounded.moved or grounded.dropped:
+        log.info(
+            "citations_grounded",
+            moved=grounded.moved,
+            dropped=sorted(grounded.dropped),
+        )
+    if not _MARKER_RE.search(grounded.answer):
+        return FinalAnswer(NO_ANSWER_PHRASE, [])
+    return FinalAnswer(grounded.answer, sources)
 
 
 def _claim(text: str) -> str:

@@ -91,8 +91,12 @@ export interface Message {
   /** Citations backing an assistant message. The API serializes this as
    *  `sources` (matching QueryResponse + the SSE `sources` event). */
   sources?: CitedSource[]
+  /** 'not_from_documents' on an answer that cites none of the documents. */
+  label?: AnswerLabel | null
   created_at: string
 }
+
+export type AnswerLabel = 'not_from_documents'
 
 export interface CitedSource {
   document_id: string
@@ -108,8 +112,8 @@ export interface CitedSource {
   char_end?: number
   /** Chunk text — used by the hover lens to show the source passage with query terms highlighted. */
   text?: string
-  /** false when the answer cites this chunk only for facts its own text does
-   *  not state: its page is shown without highlighting the chunk. */
+  /** false only on answers saved before every shown citation was checked
+   *  against its page text: the page is shown without a highlight. */
   highlight?: boolean
 }
 

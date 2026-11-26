@@ -4,11 +4,16 @@ Minimal OpenAI-compatible LLM server for the end-to-end demo check.
 Standard library only, so it runs in a stock python:3.12-slim container.
 It lists the model IDs from MOCK_MODEL_IDS (for the app's health probe),
 answers JSON-mode requests with a router decision, and answers everything
-else with a fixed, cited sentence, streamed or not.
+else, streamed or not, the way a grounded model does: it quotes source [1]
+of the prompt's CONTEXT and cites it. The app shows a citation only when
+the cited passage states the claim, so a fixed sentence cited against
+whatever passage came first would be dropped. Without a CONTEXT it gives a
+fixed, cited sentence.
 """
 
 import json
 import os
+import re
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -18,15 +23,29 @@ ROUTER_DECISION = json.dumps({"intent": "rag_query", "documents": []})
 
 
 ROUTER_PROMPT_MARKER = "Classify into exactly one intent"
+# Source [1] in the app's CONTEXT block: a header line, then the passage.
+SOURCE_1_RE = re.compile(
+    r"^\[1\] Source: [^\n]*\n(.*?)(?=\n\n\[2\] Source: |\n---|\Z)", re.S | re.M
+)
+QUOTE_WORDS = 25
 
 
 def _completion_text(body: dict) -> str:
     """Router prompts get a routing decision; everything else gets the answer."""
-    is_router = any(
-        ROUTER_PROMPT_MARKER in str(m.get("content") or "")
-        for m in body.get("messages", [])
-    )
-    return ROUTER_DECISION if is_router else ANSWER
+    contents = [str(m.get("content") or "") for m in body.get("messages", [])]
+    if any(ROUTER_PROMPT_MARKER in c for c in contents):
+        return ROUTER_DECISION
+    return _grounded_answer(contents)
+
+
+def _grounded_answer(contents: list[str]) -> str:
+    """The opening words of source [1], cited; the fixed answer without one."""
+    for content in contents:
+        match = SOURCE_1_RE.search(content)
+        if match and match.group(1).split():
+            quote = " ".join(match.group(1).split()[:QUOTE_WORDS])
+            return quote.rstrip(".,;:!?") + " [1]."
+    return ANSWER
 
 
 class Handler(BaseHTTPRequestHandler):
