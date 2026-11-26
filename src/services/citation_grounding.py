@@ -12,9 +12,12 @@ chunk, so "Rosalind Kettleborne [1]" may point at a hackathons chunk on
 another page that never states it.
 
 For each run of markers, the claim it closes (the text back to the start
-of its sentence or line, or to the previous markers) is reduced to its
-fact words: no stopwords, and no words of the question, which restate
-rather than support. A cited chunk supports the claim when its text holds
+of its sentence or line, or to the previous markers; for a run on a line of
+its own after a list, the whole list) is reduced to its fact words: no
+stopwords, no one- or two-letter codes, and no words of the question,
+which restate rather than support. Text is compared after Unicode
+normalisation, so "1\u2011888" (a non-breaking hyphen, as gpt-oss writes
+phone numbers) matches "1-888". A cited chunk supports the claim when its text holds
 all of them for a short claim (`SHORT_CLAIM_WORDS`), or at least
 `SUPPORT_SHARE` of them for a longer one. Otherwise the citation moves to the
 included chunk that does (and is dropped if that chunk is already cited
@@ -29,6 +32,7 @@ answer that cites nothing is general knowledge, shown with the
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 
 from src.core.logger import get_logger
@@ -52,6 +56,16 @@ _MARKER_RE = re.compile(r"\[(\d+)\]")
 _LEADING_SPACE_RE = re.compile(r"^[ \t]*")
 # Where a claim starts: after a sentence end followed by a space, or a line break.
 _CLAIM_START_RE = re.compile(r"[.!?](?=\s)|\n")
+# A period that ends initials (B.S., U.S.) or one of these does not end a claim.
+_INITIALS_RE = re.compile(r"\(?(?:[A-Za-z]\.)+")
+_ABBREVIATIONS = frozenset("e.g. i.e. etc. vs. no. approx.".split())
+# Unicode hyphens and dashes read as "-"; a soft hyphen is dropped.
+_DASHES = dict.fromkeys(
+    (0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212, 0xFE58, 0xFE63, 0xFF0D),
+    "-",
+) | {0x00AD: None}
+_PERCENT_RE = re.compile(r"\s*%")
+_THOUSANDS_RE = re.compile(r"(?<=\d),(?=\d{3}\b)")
 _EDGE_PUNCTUATION = "\"'`*_()[]{}<>,.;:!?…“”‘’|-#"
 _POSSESSIVE_RE = re.compile(r"['’]s$")
 _STOPWORDS = frozenset(
@@ -104,7 +118,11 @@ def ground_citations(
     last = 0
 
     for group in _GROUP_RE.finditer(answer):
-        facts = _words(_claim(answer[last : group.start()])) - question_words
+        segment = answer[last : group.start()]
+        facts = _words(_claim(segment)) - question_words
+        if not facts:
+            # A run on its own line closes the list or paragraph above it.
+            facts = _words(segment) - question_words
         targets: list[int] = []
         for n in (int(m) for m in _MARKER_RE.findall(group.group())):
             target: int | None = n
@@ -166,22 +184,44 @@ def finalize_rag_answer(
 
 def _claim(text: str) -> str:
     """The text a run of markers closes: back to its sentence or line start."""
-    starts = [m.end() for m in _CLAIM_START_RE.finditer(text)]
+    starts = [
+        m.end()
+        for m in _CLAIM_START_RE.finditer(text)
+        if m.group() == "\n" or not _ends_abbreviation(text[: m.end()])
+    ]
     return text[starts[-1] :] if starts else text
+
+
+def _ends_abbreviation(text: str) -> bool:
+    """True when `text` ends with initials ("B.S.") or an abbreviation ("e.g.")."""
+    last = text.split()[-1] if text.split() else ""
+    return bool(_INITIALS_RE.fullmatch(last)) or last.lower() in _ABBREVIATIONS
+
+
+def _normalise(text: str) -> str:
+    """NFKC, ASCII hyphens, "%" as "percent", no thousands separators."""
+    text = unicodedata.normalize("NFKC", text).translate(_DASHES)
+    return _THOUSANDS_RE.sub("", _PERCENT_RE.sub(" percent", text))
 
 
 def _words(text: str) -> set[str]:
     """
     Normalised content words: lowercased, edge punctuation stripped (so an
-    email address stays one word), possessives and plural -s removed.
+    email address stays one word), possessives and plural -s removed, and
+    no stopwords, punctuation-only tokens or one- and two-letter codes
+    ("GV", "RS": an answer's labels, not facts).
     """
     words: set[str] = set()
-    for raw in text.lower().split():
+    for raw in _normalise(text).lower().split():
         word = _POSSESSIVE_RE.sub("", raw.strip(_EDGE_PUNCTUATION))
         word = word.strip(_EDGE_PUNCTUATION)
+        if not any(ch.isalnum() for ch in word):
+            continue
+        if word.isalpha() and len(word) <= 2:
+            continue
         if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
             word = word[:-1]
-        if word and word not in _STOPWORDS:
+        if word not in _STOPWORDS:
             words.add(word)
     return words
 

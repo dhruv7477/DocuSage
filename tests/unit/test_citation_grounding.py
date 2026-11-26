@@ -141,6 +141,61 @@ class TestGroundCitations:
         assert g.answer == "Yes [1]."
         assert g.dropped == set()
 
+    def test_unicode_hyphens_match_ascii_ones(self):
+        # gpt-oss writes phone numbers with non-breaking hyphens (U+2011).
+        sources = [
+            "Employees may call the USCIS employee hotline at 1-888-897-7781 "
+            "or 1-877-875-6028 (TTY)."
+        ]
+        answer = (
+            "USCIS employee hotline: 1\u2011888\u2011897\u20117781 "
+            "(TTY 1\u2011877\u2011875\u20116028) [1]."
+        )
+        g = ground_citations(
+            answer, sources, question="What is the USCIS employee hotline phone number?"
+        )
+        assert g.answer == answer
+        assert g.dropped == set()
+
+    def test_a_run_on_its_own_line_is_checked_against_the_list_above_it(self):
+        sources = [
+            "Experience\n\nSenior Data Engineer, Pellwick Freight (2022 to present)"
+            "\n\nData Engineer, Orrin Labs (2019 to 2022)",
+            "AWS Certified Data Engineer, Associate (2024)",
+        ]
+        g = ground_citations(
+            "- Senior Data Engineer at Pellwick Freight\n- Data Engineer at Orrin Labs\n[2]",
+            sources,
+            question="Tell me about her work history.",
+        )
+        assert g.answer.endswith("\n[1]")
+        assert g.moved == {2: 1}
+
+    def test_short_codes_are_not_facts(self):
+        sources = [
+            "The CSF Core Functions are Govern, Identify, Protect, Detect, "
+            "Respond, and Recover."
+        ]
+        answer = (
+            "Govern (GV), Identify (ID), Protect (PR), Detect (DE), "
+            "Respond (RS), Recover (RC) [1]."
+        )
+        g = ground_citations(answer, sources, question="What are the six Functions?")
+        assert g.answer == answer
+
+    def test_initials_do_not_end_a_claim(self):
+        # The claim is the whole line, not just "in Computer Science".
+        sources = [
+            "Education\n\nB.S. in Computer Science, University of Eastmoor, 2018",
+            "Volunteering\n\nComputer Science tutor for first-year students",
+        ]
+        g = ground_citations(
+            "University of Eastmoor, B.S. in Computer Science [2].",
+            sources,
+            question="Where did the candidate go to university?",
+        )
+        assert g.answer == "University of Eastmoor, B.S. in Computer Science [1]."
+
     def test_an_answer_without_citations_is_unchanged(self):
         g = ground_citations("No markers here.", SOURCES, question=NAME_QUESTION)
         assert g.answer == "No markers here."
