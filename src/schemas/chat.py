@@ -45,8 +45,8 @@ class CitedSourceResponse(BaseModel):
     char_start: int = 0
     char_end: int = 0
     text: str = ""
-    # False: the answer cites this chunk for facts its text does not state,
-    # so its page is shown without a highlight.
+    # False only on answers saved before every shown citation was checked
+    # against its page text: their page is shown without a highlight.
     highlight: bool = True
 
     model_config = {"extra": "ignore"}
@@ -58,6 +58,8 @@ class MessageResponse(BaseModel):
     role: str
     content: str
     sources: list[CitedSourceResponse] = []
+    # "not_from_documents": the answer cites none of the documents.
+    label: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -82,6 +84,7 @@ class MessageResponse(BaseModel):
             role=message.role.value if hasattr(message.role, "value") else message.role,
             content=message.content,
             sources=sources,
+            label=message.answer_label,
             created_at=message.created_at,
         )
 

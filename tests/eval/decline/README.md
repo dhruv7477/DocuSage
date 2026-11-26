@@ -12,10 +12,11 @@ and fails on any regression (below).
 
 | File | What it is |
 |---|---|
-| `make_resume_pdf.py` | Builds `resume_talia_brennerholt.pdf` with PyMuPDF. |
+| `make_resume_pdf.py` | Builds both synthetic resumes with PyMuPDF. |
 | `resume_talia_brennerholt.pdf` | A two-page synthetic resume: a cover letter, then the resume. The person, companies, school and addresses are invented; emails use example.com. The name is in the largest font, so the PDF parser makes it a heading, as with a real resume. |
-| `questions.jsonl` | 51 labelled questions in five categories (below). |
-| `setup_account.py` | Creates the eval account through the HTTP API, uploads the resume, and waits for ingestion and the sample copies. |
+| `resume_rosalind_kettleborne.pdf` | A three-page synthetic resume whose name appears only as its top heading and on page 1 (17 chunks). Page 2 has a fact stated only in a heading: "First place, Riverbend Data Jam 2024" is a subheading under Hackathons. |
+| `questions.jsonl` | 54 labelled questions in six categories (below). |
+| `setup_account.py` | Creates the eval account through the HTTP API, uploads each resume into its own workspace, and waits for ingestion and the sample copies. |
 | `run_decline_eval.py` | The harness. |
 
 The other two documents are the demo samples in `demo/samples/` (the I-9
@@ -25,21 +26,22 @@ its "Sample documents" workspace.
 ## Question set
 
 Each line has `id`, `category`, `workspace`, `doc`, `question`, `note` (the
-expected answer, or why the question must be declined) and `split`. The
-resume's entity lookups (name, role and two dates) also have `answer`: the
-exact text a cited chunk must contain.
+expected answer, or why the question must be declined) and `split`.
+Fourteen specific questions also have `answer`: the exact text a cited
+chunk must contain (names, a role, dates, tools, a school, a phone number).
 
 | Category | Expected | Count | Examples |
 |---|---|---|---|
-| `answerable_specific` | answer | 18 | Entity lookups ("What is the name of the candidate?", "When is the candidate available to start?"), lists ("Which documents are mentioned in this?"), facts ("When must an employer complete Section 2 of Form I-9?") |
+| `answerable_specific` | answer | 20 | Entity lookups ("What is the name of the candidate?", "When is the candidate available to start?"), lists ("Which documents are mentioned in this?"), facts ("When must an employer complete Section 2 of Form I-9?") |
 | `answerable_vague` | answer | 8 | "Who is this person?", "What is this framework for?" |
 | `summary` | answer | 8 | "Summary of the document", "TL;DR", "What are the main takeaways from these documents?" |
 | `near_topic` | decline | 9 | "What is Canada's equivalent of Form I-9?", "What salary is Corvantis Labs offering for this role?" |
 | `off_topic` | decline | 8 | "Summarize the plot of Hamlet", "What do they call a baby kangaroo?" |
+| `general_knowledge` | answer | 1 | "What does a machine learning engineer typically do?" against the second resume |
 
-`workspace` is `resume` (the "Decline eval: resume" workspace, which holds
-only the resume) or `samples` (the "Sample documents" workspace, I-9 and
-NIST together). Near-topic questions sit close to a document's subject but
+`workspace` is `resume` or `resume2` (the "Decline eval: resume" and
+"Decline eval: resume 2" workspaces, each holding one resume) or `samples`
+(the "Sample documents" workspace, I-9 and NIST together). Near-topic questions sit close to a document's subject but
 the documents do not answer them. The off-topic set includes requests that
 use the word "summary" and two that use "they" or "this" without referring
 to the documents.
@@ -96,7 +98,7 @@ The commands assume the local demo stack is up as compose project
      api /work/make_resume_pdf.py
    ```
 
-   Re-upload it afterwards (delete the old copy in the resume workspace,
+   Re-upload them afterwards (delete the old copy in its resume workspace,
    then run `setup_account.py` again).
 
 ## What the harness does
@@ -126,20 +128,28 @@ or off-topic questions sent to the summary route (which never declines),
 those sent to the LLM (whose grounded prompt lets it decline; this
 harness cannot see that verdict), and how many questions reach the LLM.
 
-**Citation accuracy.** For each question with an `answer`, the answer must
-be in the text of a chunk the prompt includes. Then a model that cites any
-included chunk for it is simulated: `"<answer> [k]."` for every k, run
-through the app's citation grounding (`src/services/citation_grounding.py`).
-Every resulting citation must point at a chunk whose own text contains the
-answer. This needs no LLM, and catches what the bug on master did: the
-prompt shows each chunk's heading path, so a model can cite any chunk under
-the resume's name heading for the name.
+**Recall.** For each question with an `answer`, the harness reports where
+the first chunk whose page text contains it ranks in dense search and in
+the prompt's context. The answer must be in an included chunk.
+
+**Citation accuracy.** A model that cites any included chunk for the
+answer is simulated: `"<answer> [k]."` for every k, run through the app's
+citation rule (`finalize_rag_answer` in
+`src/services/citation_grounding.py`). Every citation it shows must point
+at a chunk whose page text contains the answer; a heading path never
+counts. This needs no LLM, and catches the bugs found on the live demo: the
+prompt shows each chunk's heading path, so a model can cite any chunk
+under the resume's name heading for the name.
+
+**General knowledge.** For a `general_knowledge` question, an answer that
+cites nothing must be shown with the "Not from your documents" label and
+no sources.
 
 The exit code is 1 on any regression: an LLM call, an error, a false
 decline, a near-topic or off-topic request sent to the summary route, an
-entity answer that no included chunk states, or a citation that does not
-land on a chunk stating the answer. Those are the parts of the decision that
-need no LLM to check.
+entity answer that no included chunk states, a shown citation that does
+not land on a chunk stating the answer, or an uncited answer without the
+label. Those are the parts of the decision that need no LLM to check.
 
 | Citation accuracy (entity lookups) | Citations landing on a chunk that states the answer |
 |---|---|
@@ -149,6 +159,43 @@ need no LLM to check.
 The same four questions asked of gpt-oss-120b through the stream endpoint
 (4 calls): every citation in the final answers points at a chunk that
 states the answer, and its page image highlights it.
+
+## The citation rule and document titles
+
+A citation is shown only when the cited chunk's page text supports the
+claim. One that doesn't moves to an included chunk that does, or is
+dropped. An answer whose citations are all dropped says "I cannot find this
+in your documents." An answer that cites nothing is labelled "Not from your
+documents" and shows no sources.
+
+Thirteen questions were asked of gpt-oss-120b through the app's
+`prepare()` (13 calls). All 12 answers were correct and 12 of 13 carried
+citations (the 13th was the model's own decline). None of the 20
+citations relied on a heading. Read against the chunks by hand, the word
+matcher of the previous release would have declined 1 to 3 of those 12
+correct answers under this rule. The matcher now normalises Unicode
+hyphens (gpt-oss writes phone numbers with U+2011), checks a citation run on a
+line of its own against the list above it, ignores one- and two-letter
+codes such as "GV", and does not end a claim at "B.S.". Replayed, all 12
+answers keep a supported citation.
+
+A document title (a heading that opens every chunk's heading path, such as
+a resume's name) now stays in the path only of the chunks whose text
+prints it. Measured with this harness after re-ingesting the eval
+account's documents (zero LLM calls):
+
+| Title in the heading path | Answer in context | s19 name chunk (dense / context) | s20 (dense / context) | Citations | Off-topic declined by the gate |
+|---|---|---|---|---|---|
+| Every chunk (before) | 14 of 14 | 4 / 6 | 3 / 1 | 112 of 112 | 5 of 8 |
+| Only chunks that print it (this change) | 14 of 14 | 4 / 6 | 6 / 1 | 112 of 112 | 6 of 8 |
+| Every chunk, moved to the end of the embedding text | 14 of 14 | 6 / 6 | 3 / 1 | 112 of 112 | 6 of 8 |
+
+Neither change moves an answer in or out of the context. The chosen one
+also takes the title out of the prompt's header lines, so the model reads
+a resume's name only from the chunk that states it. The lowest answerable
+cosine went from 0.503 to 0.500 (s19); "Summarize the plot of Hamlet"
+against the resume fell from 0.488 to 0.463 and is now declined by the
+gate.
 
 ## Baseline on master (ad37336)
 
@@ -166,7 +213,7 @@ sigmoid scores, threshold 0.3, summaries off, router LLM off.
 All 51: 23 false declines, 1 false answer ("What is Canada's equivalent of
 Form I-9?"), 12 of 51 questions reach the LLM. LLM calls attempted: 0.
 
-## The answer gate (this change)
+## The answer gate
 
 The cross-encoder ranks well but scores answers worded unlike the question
 near zero: against the same resume chunk, "How many years of experience

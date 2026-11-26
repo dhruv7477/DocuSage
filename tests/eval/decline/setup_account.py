@@ -6,9 +6,9 @@ through the public HTTP API only, so ingestion runs through the real
 worker exactly as it does for a visitor:
 
 1. register the account (an existing account is reused),
-2. create the "Decline eval: resume" workspace and upload the synthetic
-   resume into it,
-3. wait until the resume and the account's "Sample documents" copies of
+2. create a workspace for each synthetic resume ("Decline eval: resume"
+   and "Decline eval: resume 2") and upload the resume into it,
+3. wait until the resumes and the account's "Sample documents" copies of
    the I-9 and NIST samples are all completed.
 
 Usage (host Python with httpx). Caddy signs https://localhost with its own
@@ -32,8 +32,11 @@ from pathlib import Path
 import httpx
 
 HERE = Path(__file__).resolve().parent
-RESUME_PDF = HERE / "resume_talia_brennerholt.pdf"
-RESUME_WORKSPACE = "Decline eval: resume"
+# Each synthetic resume in a workspace of its own.
+RESUMES = {
+    "Decline eval: resume": HERE / "resume_talia_brennerholt.pdf",
+    "Decline eval: resume 2": HERE / "resume_rosalind_kettleborne.pdf",
+}
 SAMPLES_WORKSPACE = "Sample documents"
 EXPECTED_SAMPLE_COUNT = 2
 POLL_SECONDS = 5.0
@@ -73,34 +76,34 @@ def _documents(client: httpx.Client, workspace_id: str) -> list[dict]:
     return response.json()["documents"]
 
 
-def _ensure_resume(client: httpx.Client) -> str:
-    """Create the resume workspace and upload the PDF unless already there."""
-    workspace_id = _workspaces(client).get(RESUME_WORKSPACE)
+def _ensure_resume(client: httpx.Client, workspace: str, pdf: Path) -> str:
+    """Create a resume workspace and upload its PDF unless already there."""
+    workspace_id = _workspaces(client).get(workspace)
     if workspace_id is None:
-        created = client.post("/workspaces", json={"name": RESUME_WORKSPACE})
+        created = client.post("/workspaces", json={"name": workspace})
         created.raise_for_status()
         workspace_id = created.json()["id"]
     names = {d["original_filename"] for d in _documents(client, workspace_id)}
-    if RESUME_PDF.name not in names:
-        with RESUME_PDF.open("rb") as fh:
+    if pdf.name not in names:
+        with pdf.open("rb") as fh:
             upload = client.post(
                 "/documents/upload",
                 data={"workspace_id": workspace_id},
-                files={"file": (RESUME_PDF.name, fh, "application/pdf")},
+                files={"file": (pdf.name, fh, "application/pdf")},
             )
         upload.raise_for_status()
     return workspace_id
 
 
 def _wait_until_ready(client: httpx.Client, deadline: float) -> dict[str, str]:
-    """Poll until both workspaces hold only completed documents."""
+    """Poll until every eval workspace holds only completed documents."""
+    expected = {name: 1 for name in RESUMES} | {
+        SAMPLES_WORKSPACE: EXPECTED_SAMPLE_COUNT
+    }
     while True:
         spaces = _workspaces(client)
         ready: dict[str, str] = {}
-        for name, minimum in (
-            (RESUME_WORKSPACE, 1),
-            (SAMPLES_WORKSPACE, EXPECTED_SAMPLE_COUNT),
-        ):
+        for name, minimum in expected.items():
             workspace_id = spaces.get(name)
             if workspace_id is None:
                 continue
@@ -111,7 +114,7 @@ def _wait_until_ready(client: httpx.Client, deadline: float) -> dict[str, str]:
             done = [d for d in docs if d["status"] == "completed"]
             if len(done) >= minimum and len(done) == len(docs):
                 ready[name] = workspace_id
-        if len(ready) == 2:
+        if len(ready) == len(expected):
             return ready
         if time.monotonic() > deadline:
             raise TimeoutError(f"Workspaces not ready in time; ready so far: {ready}")
@@ -119,7 +122,7 @@ def _wait_until_ready(client: httpx.Client, deadline: float) -> dict[str, str]:
 
 
 def main() -> int:
-    """Set up the account and print the two workspace ids."""
+    """Set up the account and print the eval workspace ids."""
     args = _parse_args()
     password = os.environ.get("DECLINE_EVAL_PASSWORD")
     if not password:
@@ -132,7 +135,8 @@ def main() -> int:
     with httpx.Client(base_url=base, verify=tls, timeout=60.0) as client:
         token = _login(client, args.email, password)
         client.headers["Authorization"] = f"Bearer {token}"
-        _ensure_resume(client)
+        for workspace, pdf in RESUMES.items():
+            _ensure_resume(client, workspace, pdf)
         ready = _wait_until_ready(client, time.monotonic() + args.timeout)
     for name, workspace_id in ready.items():
         print(f"{name}: {workspace_id}")

@@ -85,6 +85,8 @@ class Message(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     token_count: tracked for LLM context window management.
     sources_json: JSON list of document IDs used to answer (for citations).
+    answer_label: "not_from_documents" on an answer that cites none of
+    the documents; otherwise empty.
     """
 
     __tablename__ = "messages"
@@ -100,6 +102,7 @@ class Message(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     token_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # Stores list of cited sources as JSONB — no manual json.dumps/loads needed
     sources_json: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    answer_label: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     # ── Relationships ────────────────────────────────────────────
     chat: Mapped["Chat"] = relationship("Chat", back_populates="messages")

@@ -399,6 +399,7 @@ class TestSSEStreamEndpoint:
 
         orch = self._mock_orchestrator(tokens, sources)
         mock_db = AsyncMock()
+        self.chat_service = AsyncMock()
 
         async def _fake_db():
             yield mock_db
@@ -410,7 +411,7 @@ class TestSSEStreamEndpoint:
         try:
             with TestClient(test_app, raise_server_exceptions=False) as c:
                 with patch("src.api.v1.chat.ChatService") as MockCS:
-                    mock_svc = AsyncMock()
+                    mock_svc = self.chat_service
                     mock_svc.get_chat.return_value = mock_chat
                     mock_svc.get_chat_for_question.return_value = mock_chat
                     mock_svc.load_history.return_value = []
@@ -558,6 +559,9 @@ class TestSSEStreamEndpoint:
                 page_number=n,
                 chunk_index=n,
                 relevance_score=0.0,
+                # Every chunk of a resume sits under its name heading; the
+                # name is evidence only where a chunk's page text states it.
+                heading_path=["Talia Brennerholt", f"Section {n}"],
                 text=text,
             )
 
@@ -580,6 +584,10 @@ class TestSSEStreamEndpoint:
             if line.startswith("data: ")
         ]
 
+    def _saved(self) -> dict:
+        """What the stream saved as the assistant message."""
+        return self.chat_service.save_assistant_message.await_args.kwargs
+
     def test_a_citation_moves_to_the_chunk_whose_text_states_the_fact(
         self, test_app, user_id, workspace_id, chat_id, headers
     ):
@@ -598,10 +606,54 @@ class TestSSEStreamEndpoint:
         )
         finals = [e["content"] for e in events if e.get("type") == "answer_final"]
         assert finals == ["Talia Brennerholt [2]."]
-        [sources] = [e["sources"] for e in events if e.get("type") == "sources"]
-        assert [s["highlight"] for s in sources] == [True, True]
+        [event] = [e for e in events if e.get("type") == "sources"]
+        assert [s["chunk_id"] for s in event["sources"]] == ["chunk-1", "chunk-2"]
+        assert event["label"] is None
 
-    def test_an_unsupported_citation_is_shown_without_a_highlight(
+    def test_a_claim_only_a_heading_path_supports_says_it_is_not_in_the_documents(
+        self, test_app, user_id, workspace_id, chat_id, headers
+    ):
+        """
+        The live-demo bug: the name is in every chunk's heading path but in
+        the page text of only one chunk, which did not reach the prompt. The
+        answer cited a chunk on another page. No citation is shown and the
+        answer says the documents don't state it.
+        """
+        from src.services.prompt_builder import NO_ANSWER_PHRASE
+
+        events = self._grounded_stream(
+            test_app,
+            user_id,
+            workspace_id,
+            chat_id,
+            headers,
+            ["Rosalind Kettleborne [1]."],
+        )
+        finals = [e["content"] for e in events if e.get("type") == "answer_final"]
+        assert finals == [NO_ANSWER_PHRASE]
+        [event] = [e for e in events if e.get("type") == "sources"]
+        assert (event["sources"], event["label"]) == ([], None)
+        assert self._saved()["content"] == NO_ANSWER_PHRASE
+        assert self._saved()["sources"] == []
+
+    def test_an_unsupported_citation_is_not_shown(
+        self, test_app, user_id, workspace_id, chat_id, headers
+    ):
+        from src.services.prompt_builder import NO_ANSWER_PHRASE
+
+        events = self._grounded_stream(
+            test_app,
+            user_id,
+            workspace_id,
+            chat_id,
+            headers,
+            ["She is AWS Certified [1]. She speaks Portuguese [1]."],
+        )
+        finals = [e["content"] for e in events if e.get("type") == "answer_final"]
+        assert finals == ["She is AWS Certified [1]. She speaks Portuguese."]
+        assert NO_ANSWER_PHRASE not in finals[0]
+
+    def test_an_answer_citing_no_document_is_labelled_not_from_your_documents(
         self, test_app, user_id, workspace_id, chat_id, headers
     ):
         events = self._grounded_stream(
@@ -610,11 +662,13 @@ class TestSSEStreamEndpoint:
             workspace_id,
             chat_id,
             headers,
-            ["She speaks Portuguese [1]."],
+            ["Recruiters usually skim a resume in under a minute."],
         )
         assert not [e for e in events if e.get("type") == "answer_final"]
-        [sources] = [e["sources"] for e in events if e.get("type") == "sources"]
-        assert [s["highlight"] for s in sources] == [False, True]
+        [event] = [e for e in events if e.get("type") == "sources"]
+        assert (event["sources"], event["label"]) == ([], "not_from_documents")
+        assert self._saved()["label"] == "not_from_documents"
+        assert self._saved()["sources"] == []
 
     def test_stream_commits_user_message_before_generation(
         self, test_app, user_id, workspace_id, chat_id, headers

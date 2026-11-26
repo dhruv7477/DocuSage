@@ -57,7 +57,7 @@ from src.schemas.chat import (
     UpdateChatTitleRequest,
 )
 from src.services.answer_validator import validate_answer
-from src.services.citation_grounding import ground_sources
+from src.services.citation_grounding import FinalAnswer, finalize_rag_answer
 from src.services.chat_orchestrator import ChatOrchestrator, StreamPlan
 from src.services.chat_service import ChatService
 from src.services.quota_service import QuotaService
@@ -451,7 +451,8 @@ async def _sse_generator(
         3. Validate the finished answer (programmatic: citation mapping,
            abstention contract) and persist the corrected text
         4. `warning` events (abstention / validator findings)
-        5. `sources` event — context-ordered: sources[n-1] backs [n]
+        5. `sources` event — context-ordered: sources[n-1] backs [n]; with
+           the answer's label ("not_from_documents" or null)
         6. `done` event
 
     On any error: emit error event and close stream cleanly.
@@ -574,29 +575,25 @@ async def _sse_generator(
             abstained=abstained,
             allow_citations=plan.allow_citations if plan else False,
         )
-        # The answer gate sends every question it can't rule out to the
-        # model, so "the documents don't cover this" from the model is a
-        # normal decline, not a problem to warn about.
-        model_declined = result.warning_code == "model_abstained"
-
-        # Source citations belong to grounded RAG answers only. Summaries,
-        # off-topic replies and declines are not per-passage citable, so we
-        # neither persist nor surface sources for them. A RAG answer's
-        # citations are checked against each chunk's own text: one cited
-        # only for what its heading says moves to a chunk that states it.
-        final_answer, display_sources = result.answer, []
-        if intent == "rag_query" and not model_declined:
-            final_answer, display_sources = ground_sources(
-                result.answer, cited, question=query
-            )
-        if final_answer != "".join(full_answer_parts):
+        # Source citations belong to grounded RAG answers only. Summaries
+        # and off-topic replies are not per-passage citable, so we neither
+        # persist nor surface sources for them. A RAG answer shows a
+        # citation only where the cited chunk's page text states the claim
+        # (a heading path is never evidence); one that cites nothing is
+        # labelled as not from the documents. The model's own decline ("the
+        # documents don't cover this") is normal and has no sources.
+        final = FinalAnswer(result.answer, [])
+        if intent == "rag_query":
+            final = finalize_rag_answer(result.answer, cited, question=query)
+        if final.answer != "".join(full_answer_parts):
             # Frontend replaces the streamed text wholesale.
-            yield _sse_event({"type": "answer_final", "content": final_answer})
+            yield _sse_event({"type": "answer_final", "content": final.answer})
 
         assistant_msg = await chat_service.save_assistant_message(
             chat_id=chat_id,
-            content=final_answer,
-            sources=display_sources,
+            content=final.answer,
+            sources=final.sources,
+            label=final.label,
         )
 
         if chat.message_count <= 2:
@@ -636,10 +633,10 @@ async def _sse_generator(
                         "char_start": s.char_start,
                         "char_end": s.char_end,
                         "text": s.text,
-                        "highlight": s.highlight,
                     }
-                    for s in display_sources
+                    for s in final.sources
                 ],
+                "label": final.label,
                 "confidence": round(confidence, 3),
             }
         )
