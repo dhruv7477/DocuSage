@@ -19,6 +19,13 @@ Questions are single turn (no history), so the standalone-question
 rewrite never runs, and the router's LLM tier is off unless
 ROUTER_USE_LLM=true.
 
+For questions with an `answer` it also measures recall (where the first
+chunk whose page text states the answer ranks in dense search and in the
+prompt's context) and citation accuracy under the app's citation rule.
+A general-knowledge question must reach the model, and an answer that
+cites nothing must be shown with the "Not from your documents" label and
+no sources.
+
 Run inside the api image (see README.md in this folder):
 
     python /work/run_decline_eval.py --email decline-eval@example.com
@@ -47,15 +54,21 @@ from src.core.logger import configure_logging
 from src.db.session import AsyncSessionLocal
 from src.models.document import Document, DocumentStatus
 from src.models.user import User
-from src.services.citation_grounding import ground_citations
 from src.models.workspace import Workspace
 from src.providers.llm import factory as llm_factory
 from src.providers.llm.base import BaseLLMProvider, LLMConfig, LLMMessage, LLMResponse
+from src.services.citation_grounding import NOT_FROM_DOCUMENTS, finalize_rag_answer
+from src.services.prompt_builder import NO_ANSWER_PHRASE
+from src.services.rag_service import CitedSource
 from src.vector_store.factory import get_vector_store
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_QUESTIONS = HERE / "questions.jsonl"
-WORKSPACE_NAMES = {"resume": "Decline eval: resume", "samples": "Sample documents"}
+WORKSPACE_NAMES = {
+    "resume": "Decline eval: resume",
+    "resume2": "Decline eval: resume 2",
+    "samples": "Sample documents",
+}
 DECLINED_INTENT = "off_topic"
 SUMMARY_INTENT = "doc_summary"
 CATEGORY_ORDER = (
@@ -64,8 +77,12 @@ CATEGORY_ORDER = (
     "summary",
     "near_topic",
     "off_topic",
+    "general_knowledge",
 )
 MUST_DECLINE = frozenset({"near_topic", "off_topic"})
+GENERAL_KNOWLEDGE = "general_knowledge"
+# An answer from outside the documents, as a model would write it: no [n].
+UNCITED_ANSWER = "In general, this depends on the employer and the role."
 SETTINGS_SHOWN = (
     "reranker",
     "reranker_model",
@@ -140,14 +157,14 @@ class GuardedLLM(BaseLLMProvider):
 
 @dataclass
 class Probe:
-    """Captures the reranked outcome and the dense scores of one question."""
+    """Captures the reranked outcome and the dense hits of one question."""
 
     outcome: Any = None
-    dense_scores: list[float] = field(default_factory=list)
+    dense_hits: list[Any] = field(default_factory=list)
 
     def reset(self) -> None:
         self.outcome = None
-        self.dense_scores = []
+        self.dense_hits = []
 
 
 def _instrument(rag: Any, probe: Probe) -> None:
@@ -166,7 +183,7 @@ def _instrument(rag: Any, probe: Probe) -> None:
 
     async def recording_search(*args: Any, **kwargs: Any) -> Any:
         hits = await search(*args, **kwargs)
-        probe.dense_scores.extend(h.score for h in hits)
+        probe.dense_hits.extend(hits)
         return hits
 
     store.search = recording_search
@@ -255,10 +272,21 @@ class Result:
     top_dense: float | None
     seconds: float
     error: str = ""
-    # Citation accuracy, for questions with an `answer` (see check_citations).
-    answer_in_context: bool | None = None
+    # Recall and citation accuracy, for questions with an `answer`: the
+    # 1-based rank of the first chunk whose page text states it, in dense
+    # search and in the prompt's context (None: not there).
+    answer_dense_rank: int | None = None
+    answer_context_rank: int | None = None
     citations_checked: int = 0
     citation_misses: list[int] = field(default_factory=list)
+    # General knowledge: an uncited answer is labelled and shows no sources.
+    uncited_labelled: bool | None = None
+
+    @property
+    def answer_in_context(self) -> bool | None:
+        if self.citations_checked == 0 and self.answer_context_rank is None:
+            return None
+        return self.answer_context_rank is not None
 
     @property
     def correct(self) -> bool:
@@ -278,7 +306,9 @@ async def evaluate(
     probe.reset()
     started = time.perf_counter()
     intent, error = "", ""
-    citations: tuple[bool | None, int, list[int]] = (None, 0, [])
+    citations: tuple[int, list[int]] = (0, [])
+    context_rank: int | None = None
+    uncited_labelled: bool | None = None
     try:
         plan = await orchestrator.prepare(
             query=question.question,
@@ -291,7 +321,10 @@ async def evaluate(
         )
         intent = plan.intent
         if question.answer and intent == "rag_query":
-            citations = check_citations(question, [s.text for s in plan.sources])
+            context_rank = _first_rank([s.text for s in plan.sources], question.answer)
+            citations = check_citations(question, plan.sources)
+        if question.category == GENERAL_KNOWLEDGE and intent == "rag_query":
+            uncited_labelled = check_uncited(question, plan.sources)
         await _close(plan.token_iter)
     except Exception as exc:  # reported per question, never hidden
         error = f"{type(exc).__name__}: {exc}"
@@ -316,36 +349,58 @@ async def evaluate(
         warnings=[e.get("code", "") for e in events if e.get("type") == "warning"],
         confidence=getattr(outcome, "confidence", None),
         top3=[round(r.score, 4) for r in reranked[:3]],
-        top_dense=max(probe.dense_scores) if probe.dense_scores else None,
+        top_dense=max((h.score for h in probe.dense_hits), default=None),
         seconds=round(elapsed, 2),
         error=error,
-        answer_in_context=citations[0],
-        citations_checked=citations[1],
-        citation_misses=citations[2],
+        answer_dense_rank=_first_rank(
+            [h.payload.text for h in probe.dense_hits], question.answer
+        ),
+        answer_context_rank=context_rank,
+        citations_checked=citations[0],
+        citation_misses=citations[1],
+        uncited_labelled=uncited_labelled,
     )
 
 
 def check_citations(
-    question: Question, source_texts: list[str]
-) -> tuple[bool, int, list[int]]:
+    question: Question, sources: list[CitedSource]
+) -> tuple[int, list[int]]:
     """
-    Citation accuracy with no LLM call. The answer must be in an included
-    chunk's own text, and a model that cites ANY included chunk for it
-    (simulated as "<answer> [k].", k = 1..n) must end up, after the app's
-    citation grounding, citing only chunks whose text contains the answer.
-    Returns (answer in context, citations checked, k values that missed).
+    Citation accuracy with no LLM call. A model that cites ANY included
+    chunk for the answer (simulated as "<answer> [k].", k = 1..n) must end
+    up, after the app's citation rule (`finalize_rag_answer`), showing only
+    citations to chunks whose page text contains the answer. When no
+    included chunk has it, the answer must become the decline instead.
+    Returns (citations checked, k values that missed).
     """
     answer = question.answer or ""
-    holds = [_contains(text, answer) for text in source_texts]
+    holds = [_contains(s.text, answer) for s in sources]
     misses: list[int] = []
-    for k in range(1, len(source_texts) + 1):
-        grounded = ground_citations(
-            f"{answer} [{k}].", source_texts, question=question.question
+    for k in range(1, len(sources) + 1):
+        final = finalize_rag_answer(
+            f"{answer} [{k}].", sources, question=question.question
         )
-        cited = [int(n) for n in re.findall(r"\[(\d+)\]", grounded.answer)]
-        if not cited or not all(holds[n - 1] for n in cited):
+        cited = [int(n) for n in re.findall(r"\[(\d+)\]", final.answer)]
+        if any(holds):
+            ok = bool(cited) and all(holds[n - 1] for n in cited)
+        else:
+            ok = final.answer == NO_ANSWER_PHRASE and not final.sources
+        if not ok:
             misses.append(k)
-    return any(holds), len(source_texts), misses
+    return len(sources), misses
+
+
+def check_uncited(question: Question, sources: list[CitedSource]) -> bool:
+    """An answer citing nothing is labelled and shown with no sources."""
+    final = finalize_rag_answer(UNCITED_ANSWER, sources, question=question.question)
+    return final.label == NOT_FROM_DOCUMENTS and not final.sources
+
+
+def _first_rank(texts: list[str], answer: str | None) -> int | None:
+    """1-based position of the first text that contains `answer`."""
+    if not answer:
+        return None
+    return next((i for i, t in enumerate(texts, 1) if _contains(t, answer)), None)
 
 
 def _contains(text: str, answer: str) -> bool:
@@ -395,16 +450,31 @@ def print_report(results: list[Result], llm_calls: list[str]) -> None:
     if checked:
         total = sum(r.citations_checked for r in checked)
         missed = sum(len(r.citation_misses) for r in checked)
+        in_context = sum(bool(r.answer_in_context) for r in checked)
         print(
-            f"\nCitation accuracy (entity lookups, every included chunk cited in "
-            f"turn): {total - missed} of {total} citations land on a chunk that "
-            f"states the answer"
+            f"\nRecall (entity lookups): answer in context {in_context} of "
+            f"{len(checked)}; rank of the first chunk stating it (dense / context):"
         )
         for r in checked:
             print(
-                f"  {r.id}: answer in context: {r.answer_in_context}, "
-                f"missed citations: {r.citation_misses or 'none'}"
+                f"  {r.id}: dense {r.answer_dense_rank or '-'} / context "
+                f"{r.answer_context_rank or '-'}"
             )
+        print(
+            f"Citation accuracy (every included chunk cited in turn): "
+            f"{total - missed} of {total} shown citations land on a chunk that "
+            f"states the answer"
+        )
+        for r in checked:
+            if r.citation_misses:
+                print(f"  {r.id}: missed citations: {r.citation_misses}")
+    general = [r for r in results if r.category == GENERAL_KNOWLEDGE]
+    if general:
+        labelled = sum(bool(r.uncited_labelled) for r in general)
+        print(
+            f"General knowledge: {labelled} of {len(general)} uncited answers "
+            f"labelled with no sources"
+        )
     errors = sum(r.outcome == "error" for r in results)
     print(f"\nErrors: {errors}   LLM calls attempted: {len(llm_calls)}")
     if llm_calls:
@@ -477,6 +547,8 @@ def regressions(results: list[Result]) -> list[str]:
                 f"{r.id}: citations to {r.citation_misses} do not land on a chunk "
                 f"that states the answer"
             )
+        if r.uncited_labelled is False:
+            found.append(f"{r.id}: an uncited answer is not labelled")
     return found
 
 
@@ -524,7 +596,11 @@ async def run(args: argparse.Namespace) -> int:
         payload = {
             "settings": {k: getattr(settings, k, None) for k in SETTINGS_SHOWN},
             "llm_calls": guard.calls,
-            "results": [asdict(r) | {"correct": r.correct} for r in results],
+            "results": [
+                asdict(r)
+                | {"correct": r.correct, "answer_in_context": r.answer_in_context}
+                for r in results
+            ],
         }
         args.json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
